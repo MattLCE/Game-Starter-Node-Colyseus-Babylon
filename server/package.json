@@ -6,12 +6,19 @@
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",
-    "dev": "tsc-watch --onSuccess \"node dist/server.js\""
+    "dev": "tsc-watch --onSuccess \"node dist/src/server.js\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "@colyseus/core": "^0.16.14",
+    "@colyseus/schema": "^3.0.25",
+    "@colyseus/ws-transport": "^0.16.3",
+    "@types/express": "^5.0.1",
+    "express": "^4.21.2"
+  },
   "devDependencies": {
-    "vite": "^6.2.3"
+    "typescript": "^5.8.2"
   }
 }

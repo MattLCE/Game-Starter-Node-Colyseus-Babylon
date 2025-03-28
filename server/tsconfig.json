@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    /* Base Options: */
+    "esModuleInterop": true, // Enables compatibility with CommonJS modules
+    "skipLibCheck": true, // Skip type checking of declaration files (speeds up compilation)
+    "target": "ES2020", // Target modern Node.js version (adjust if needed)
+    "allowJs": false, // Don't allow JavaScript files (ensure pure TS)
+    "resolveJsonModule": true, // Allows importing JSON files
+    "moduleDetection": "force", // Treat files as modules
+    "isolatedModules": true, // Ensure files can be compiled separately
+
+    /* Strictness */
+    "strict": true, // Enable all strict type-checking options
+    "noUncheckedIndexedAccess": true, // Add safety for array/object access
+    "noImplicitAny": true, // Require types, don't default to 'any'
+
+    /* If NOT transpiling with SWC: */
+    "moduleResolution": "node", // How modules are found (standard for Node.js)
+    "module": "CommonJS", // Output module format for standard Node.js runtime
+    "outDir": "./dist", // Where to output compiled JavaScript files
+    "sourceMap": true, // Generate source maps for debugging
+
+    /* Required for Colyseus Schema Decorators */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    /* Paths: Optional, if you use path aliases */
+    // "baseUrl": ".",
+    // "paths": {
+    //   "@/*": ["src/*"]
+    // }
+  },
+  "include": ["src/**/*.ts"], // Which files to include in compilation
+  "exclude": ["node_modules", "dist"] // Which files/folders to exclude
+}

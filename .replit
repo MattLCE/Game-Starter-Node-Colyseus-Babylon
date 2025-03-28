@@ -1,14 +1,26 @@
-entrypoint = "index.js"
-modules = ["nodejs-22"]
-hidden = [".config", "package-lock.json"]
+# .replit configuration file
 
-[gitHubImport]
-requiredFiles = [".replit", "replit.nix", "package.json", "package-lock.json"]
+# Specify the language/environment
+language = "typescript" 
 
+# Define the command executed when the 'Run' button is pressed
+# Installs, builds client, builds server, starts server
+run = "npm install --only=prod && npm run build --prefix client && npm run build --prefix server && npm start --prefix server"
+
+# Remove or comment out old/conflicting entries if they existed
+# entrypoint = "..." 
+# [deployment] 
+# ... etc ...
+
+# You can keep [nix] section if needed for specific Node/system packages
 [nix]
-channel = "stable-24_11"
+channel = "stable-24_11" # Or your desired Nix channel
 
-[deployment]
-run = ["node", "index.js"]
-deploymentTarget = "autoscale"
-ignorePorts = false
+[[ports]]
+localPort = 2567
+externalPort = 80
+
+# Other sections like [githubImport] are usually fine to keep if present
+# Add sections if needed, e.g., for environment variables:
+# [env]
+# MY_VARIABLE = "my_value" 

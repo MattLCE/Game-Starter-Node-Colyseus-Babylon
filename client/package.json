@@ -1,0 +1,21 @@
+{
+  "name": "bountyfull-server",
+  "version": "1.0.0",
+  "description": "Server for Bountyfull Game",
+  "main": "dist/server.js",
+    "scripts": {
+    "dev": "vite",
+    "build": "npx -y vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@babylonjs/core": "^8.0.1",
+    "@babylonjs/materials": "^8.0.1",
+    "@types/express": "^5.0.1",
+    "colyseus.js": "^0.16.15",
+    "express": "^4.21.2"
+  }
+}
