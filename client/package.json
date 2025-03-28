@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Server for Bountyfull Game",
   "main": "dist/server.js",
-    "scripts": {
+  "scripts": {
     "dev": "vite",
     "build": "npx -y vite build",
     "preview": "vite preview"

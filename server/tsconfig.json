@@ -22,7 +22,7 @@
 
     /* Required for Colyseus Schema Decorators */
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
+    "emitDecoratorMetadata": true
 
     /* Paths: Optional, if you use path aliases */
     // "baseUrl": ".",

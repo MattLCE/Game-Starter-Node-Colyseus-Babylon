@@ -1,10 +1,10 @@
-import { defineConfig } from 'vite';
-import path from 'path';
+import { defineConfig } from "vite";
+import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig({
   // Define the root of the client project for Vite
-  root: path.resolve(__dirname, 'client'),
+  root: path.resolve(__dirname, "client"),
   // Define the server options (for Vite's dev server)
   server: {
     port: 8080, // Port for the Vite dev server (different from Colyseus port)
@@ -19,7 +19,7 @@ export default defineConfig({
   // Define build options
   build: {
     // Output directory relative to the 'root' option
-    outDir: path.resolve(__dirname, 'dist/client'),
+    outDir: path.resolve(__dirname, "dist/client"),
     // Empty the output directory before building
     emptyOutDir: true,
     // Optional: Generate source maps for debugging production builds

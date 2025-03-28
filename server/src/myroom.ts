@@ -16,9 +16,8 @@ export class MyRoomState extends Schema {
 
 // Define the Room logic
 export class MyRoom extends Room<MyRoomState> {
-
   // Called when the room is created
-  onCreate(options: any) {
+  onCreate(_options: any) {
     console.log("[MyRoom] Room created!");
 
     // Set the initial state
@@ -33,7 +32,7 @@ export class MyRoom extends Room<MyRoomState> {
   }
 
   // Called when a client joins the room
-  onJoin(client: Client, options: any) {
+  onJoin(client: Client, _options: any) {
     console.log(`[MyRoom] Client ${client.sessionId} joined!`);
 
     // Create a new Player instance for the joining client
@@ -45,7 +44,7 @@ export class MyRoom extends Room<MyRoomState> {
   }
 
   // Called when a client leaves the room
-  onLeave(client: Client, consented: boolean) {
+  onLeave(client: Client, _consented: boolean) {
     console.log(`[MyRoom] Client ${client.sessionId} left.`);
 
     // Remove the player from the state

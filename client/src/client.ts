@@ -1,7 +1,7 @@
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { Scene } from "@babylonjs/core/scene";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { Color3 } from "@babylonjs/core/Maths/math.color"; 
+import { Color3 } from "@babylonjs/core/Maths/math.color";
 // OR alternatively, sometimes it's directly in core, but math.color is safer:
 // import { Color3 } from "@babylonjs/core"; // Less likely needed if math.color works
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
@@ -17,7 +17,10 @@ import * as Colyseus from "colyseus.js";
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 
 // Create Babylon.js engine
-const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+const engine = new Engine(canvas, true, {
+  preserveDrawingBuffer: true,
+  stencil: true,
+});
 
 // Create scene
 const scene = new Scene(engine);
@@ -41,7 +44,11 @@ groundMaterial.lineColor = new Color3(1.0, 1.0, 1.0);
 groundMaterial.opacity = 0.98;
 
 // Create ground plane
-const ground = MeshBuilder.CreateGround("ground1", { width: 50, height: 50 }, scene);
+const ground = MeshBuilder.CreateGround(
+  "ground1",
+  { width: 50, height: 50 },
+  scene
+);
 ground.material = groundMaterial;
 
 // --- Colyseus Client Setup ---
@@ -52,7 +59,7 @@ ground.material = groundMaterial;
 const protocol = window.location.protocol === "https:" ? "wss" : "ws";
 const hostname = window.location.hostname;
 // Assume Replit proxies WSS/WS on the default ports (443/80) for the main hostname
-const wsEndpoint = `${protocol}://${hostname}`; 
+const wsEndpoint = `${protocol}://${hostname}`;
 
 console.log(`Attempting to connect to Colyseus at: ${wsEndpoint}`);
 
@@ -87,7 +94,6 @@ async function connect() {
       console.log(`[Colyseus] Left room with code: ${code}`);
       room = null; // Clear room reference
     });
-
   } catch (e) {
     console.error("[Colyseus] Join Error:", e);
     // Handle connection error (e.g., show message to user)
@@ -96,7 +102,6 @@ async function connect() {
 
 // Attempt connection when the script loads
 connect();
-
 
 // --- Babylon Render Loop ---
 engine.runRenderLoop(() => {
