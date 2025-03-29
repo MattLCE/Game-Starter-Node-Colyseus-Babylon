@@ -28,5 +28,10 @@
     "prettier": "^3.5.3",
     "vite": "^6.2.3",
     "vitest": "^3.0.9"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.15.0",
+    "prefix": "^1.0.0",
+    "server": "^1.0.41"
   }
 }
