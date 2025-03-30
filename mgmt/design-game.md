@@ -7,11 +7,11 @@ See also:
 *   [`DESIGN-PLATFORM.md`](./DESIGN-PLATFORM.md) (Technical foundation)
 *   [`CONTRIBUTING.md`](./CONTRIBUTING.md) (Development processes)
 
-## 1. Game Concept
+## Game Concept
 
 This is a 3D, session-based, multiplayer looter-survivor game with a humorous cyberpunk-lite sci-fi setting. Players drop onto a dangerous, procedurally generated alien world to collect valuable resources and deposit them at an extraction point (dropship) within a short time limit, competing implicitly (and potentially explicitly later) with other players and hazardous environments/creatures. The core tension revolves around risk vs. reward.
 
-## 2. Core Gameplay Loop
+## Core Gameplay Loop
 
 1.  **Station:** Player starts at a simple UI screen showing persistent scores/currency. Clicks "Start Drop".
 2.  **Drop:** Client connects to server room, player entity spawns near the Dropship in the 3D world. Session timer starts.
@@ -21,7 +21,7 @@ This is a 3D, session-based, multiplayer looter-survivor game with a humorous cy
 6.  **Return:** Client is notified, gameplay stops, client disconnects, returns to the Station screen showing updated persistent score. Server resets the room state for the next session.
 7.  **(Future):** Player death mechanics return the player to the Station immediately, potentially losing session inventory.
 
-## 3. Key Mechanics (Foundation & Phase 1)
+## Key Mechanics (Foundation & Phase 1)
 
 *   **Player Movement:**
     *   Client captures WASD/touch joystick input.
@@ -63,7 +63,7 @@ This is a 3D, session-based, multiplayer looter-survivor game with a humorous cy
     *   When timer ends, server broadcasts `sessionEnd`, disconnects clients after delay, resets room state.
     *   Client handles `sessionEnd` by showing message, freezing input, returning to Station Screen.
 
-## 4. Entities & Components (Initial ECS Plan)
+## Entities & Components (Initial ECS Plan)
 
 *(This will expand significantly)*
 
@@ -82,39 +82,26 @@ This is a 3D, session-based, multiplayer looter-survivor game with a humorous cy
     *   `NpcBehaviorComponent { state: 'wandering' | 'seeking_item' | 'returning', targetId? }` (Server-side)
     *   `StealableComponent {}` (Marker for entities that can steal/be stolen from)
 
-## 5. State Schema (`MyRoomState` - Initial)
+## How MyRoom Works
 
-```typescript
-// Located potentially in /shared or /server/src/rooms/schema
-import { Schema, MapSchema, type } from "@colyseus/schema";
+Schema Update: Includes Position, Item, NpcCollector, and updates Player. Adds remainingTime.
 
-export class Position extends Schema {
-  @type("number") x: number = 0;
-  @type("number") y: number = 0;
-  @type("number") z: number = 0;
-}
+Simulation Instance: simulation property created in onCreate.
 
-export class Player extends Schema {
-  @type(Position) position = new Position();
-  // @type("number") rotationY: number = 0; // Add later
-  @type("number") itemCount: number = 0; // Simple session count for now
-  // @type("string") name: string = ""; // Add later
-}
+Entity Maps: playerEntities, itemEntities, npcEntities maps track the link between Colyseus sessionId/state key and the ECS Entity.
 
-export class Item extends Schema {
-  @type("string") itemType: string = "default";
-  @type(Position) position = new Position();
-}
+Game Loop: setSimulationInterval calls updateSimulation.
 
-// Placeholder for validation feature NPC
-export class NpcCollector extends Schema {
-   @type(Position) position = new Position();
-   @type("number") itemCount: number = 0; 
-}
+updateSimulation: Calls simulation.update() then calls syncStateToSchema().
 
-export class MyRoomState extends Schema {
-  @type({ map: Player }) players = new MapSchema<Player>();
-  @type({ map: Item }) items = new MapSchema<Item>();
-  @type({ map: NpcCollector }) npcCollectors = new MapSchema<NpcCollector>();
-  @type("number") remainingTime: number = 300000; // Milliseconds (e.g., 5 mins)
-}
+syncStateToSchema(): Iterates through the Colyseus state maps (players, items, npcCollectors), finds the corresponding ECS entity using the maps, reads data from ECS components (Position, Inventory), and writes it into the Colyseus state object properties (playerState.position.x = ...). Also handles cleanup if entities were destroyed in the simulation. This is the crucial link.
+
+onJoin: Creates entity in simulation, stores mapping, creates Colyseus state object, initializes state object from simulation data, adds state object to this.state.players.
+
+onLeave: Removes entity from simulation using the map, removes from mapping, removes from Colyseus state.
+
+Item Spawning: spawnItem helper method creates the item in both the simulation and the Colyseus state, storing the mapping.
+
+Message Handlers: requestCollect and requestDeposit added. They find the player's ECS entity and add specific "intent" components (WantsToCollect, WantsToDeposit - though deposit is handled manually for now). The ECS systems (CollectionSystem, DepositSystem - to be created) will act on these components in the simulation update.
+
+Session Timer: Basic SESSION_DURATION, remainingTime state, resetSessionTimer, and endSession logic added.
