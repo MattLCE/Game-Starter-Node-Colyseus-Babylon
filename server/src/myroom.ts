@@ -1,6 +1,11 @@
 import { Room, Client, ServerError } from "@colyseus/core";
 import { Schema, MapSchema, type } from "@colyseus/schema";
-import { Simulation, Player as SimPlayer, Item as SimItem, NpcCollector as SimNpc } from "./simulation"; // Assuming components are exported if needed directly, or use simulation methods
+import {
+  Simulation,
+  Player as SimPlayer,
+  Item as SimItem,
+  NpcCollector as SimNpc,
+} from "./simulation"; // Assuming components are exported if needed directly, or use simulation methods
 import type { Entity } from "geotic"; // Import Entity type from geotic
 
 const SESSION_DURATION = 60 * 1000; // 1 minute for testing
@@ -30,8 +35,8 @@ export class Item extends Schema {
 
 // Placeholder for validation feature NPC
 export class NpcCollector extends Schema {
-   @type(Position) position = new Position();
-   @type("number") itemCount: number = 0;
+  @type(Position) position = new Position();
+  @type("number") itemCount: number = 0;
 }
 
 export class MyRoomState extends Schema {
@@ -66,7 +71,10 @@ export class MyRoom extends Room<MyRoomState> {
     // 3. Start the simulation loop
     // We divide deltaTime by 1000 because Colyseus provides it in milliseconds,
     // but physics/ECS updates often expect seconds.
-    this.setSimulationInterval((deltaTime) => this.updateSimulation(deltaTime / 1000), 1000 / 60); // Aim for 60Hz update rate
+    this.setSimulationInterval(
+      (deltaTime) => this.updateSimulation(deltaTime / 1000),
+      1000 / 60
+    ); // Aim for 60Hz update rate
 
     // 4. Set up session timer logic
     this.resetSessionTimer();
@@ -85,37 +93,45 @@ export class MyRoom extends Room<MyRoomState> {
         const itemEntity = this.itemEntities.get(message.itemId);
 
         if (playerEntity && itemEntity) {
-            // Add a component to the ECS entity signalling intent
-            playerEntity.add(this.simulation.WantsToCollect, { targetItemId: itemEntity.id });
-            console.log(`[MyRoom] Client ${client.sessionId} wants to collect ECS item ${itemEntity.id} (State Key: ${message.itemId})`);
+          // Add a component to the ECS entity signalling intent
+          playerEntity.add(this.simulation.WantsToCollect, {
+            targetItemId: itemEntity.id,
+          });
+          console.log(
+            `[MyRoom] Client ${client.sessionId} wants to collect ECS item ${itemEntity.id} (State Key: ${message.itemId})`
+          );
         } else {
-            console.warn(`[MyRoom] Collection request failed: Player ${client.sessionId} or Item ${message.itemId} not found.`);
+          console.warn(
+            `[MyRoom] Collection request failed: Player ${client.sessionId} or Item ${message.itemId} not found.`
+          );
         }
       } catch (error) {
-          console.error(`[MyRoom] Error processing collect request:`, error);
+        console.error(`[MyRoom] Error processing collect request:`, error);
       }
     });
 
     this.onMessage("requestDeposit", (client, _message: any) => {
-       try {
-            const playerEntity = this.playerEntities.get(client.sessionId);
-            if(playerEntity) {
-                // TODO: Add WantsToDeposit component when defined in Simulation
-                 console.log(`[MyRoom] Client ${client.sessionId} wants to deposit.`);
-                 // playerEntity.add(this.simulation.WantsToDeposit);
-                 // For now, directly modify state for simplicity until ECS system exists
-                 const simInventory = playerEntity.get(this.simulation.Inventory);
-                 if (simInventory && simInventory.itemCount > 0) {
-                     // In future, this would be handled by a deposit system in ECS
-                     console.log(`[MyRoom] Player ${playerEntity.id} deposited ${simInventory.itemCount} items (Manual Handling).`);
-                     // TODO: Add logic to update persistent score (via DB call later)
-                     simInventory.itemCount = 0; // Clear ECS inventory
-                     // State sync below will update Colyseus state itemCount
-                 }
-            }
-       } catch (error) {
-           console.error(`[MyRoom] Error processing deposit request:`, error);
-       }
+      try {
+        const playerEntity = this.playerEntities.get(client.sessionId);
+        if (playerEntity) {
+          // TODO: Add WantsToDeposit component when defined in Simulation
+          console.log(`[MyRoom] Client ${client.sessionId} wants to deposit.`);
+          // playerEntity.add(this.simulation.WantsToDeposit);
+          // For now, directly modify state for simplicity until ECS system exists
+          const simInventory = playerEntity.get(this.simulation.Inventory);
+          if (simInventory && simInventory.itemCount > 0) {
+            // In future, this would be handled by a deposit system in ECS
+            console.log(
+              `[MyRoom] Player ${playerEntity.id} deposited ${simInventory.itemCount} items (Manual Handling).`
+            );
+            // TODO: Add logic to update persistent score (via DB call later)
+            simInventory.itemCount = 0; // Clear ECS inventory
+            // State sync below will update Colyseus state itemCount
+          }
+        }
+      } catch (error) {
+        console.error(`[MyRoom] Error processing deposit request:`, error);
+      }
     });
 
     // Add other message handlers (e.g., player input) here later
@@ -143,9 +159,9 @@ export class MyRoom extends Room<MyRoomState> {
     // Add to Colyseus state map
     this.state.players.set(client.sessionId, playerState);
 
-     // Start session timer if this is the first player
-     if (this.clients.length === 1 && this.sessionTimeout === null) {
-        this.resetSessionTimer(true); // Start immediately
+    // Start session timer if this is the first player
+    if (this.clients.length === 1 && this.sessionTimeout === null) {
+      this.resetSessionTimer(true); // Start immediately
     }
   }
 
@@ -160,7 +176,9 @@ export class MyRoom extends Room<MyRoomState> {
       this.simulation.removePlayer(entity);
       this.playerEntities.delete(client.sessionId);
     } else {
-        console.warn(`[MyRoom] Could not find simulation entity for leaving client ${client.sessionId}`);
+      console.warn(
+        `[MyRoom] Could not find simulation entity for leaving client ${client.sessionId}`
+      );
     }
 
     // Remove player from Colyseus state
@@ -181,20 +199,22 @@ export class MyRoom extends Room<MyRoomState> {
 
   updateSimulation(deltaTime: number) {
     try {
-        // 1. Update the ECS & Physics simulation
-        this.simulation.update(deltaTime);
+      // 1. Update the ECS & Physics simulation
+      this.simulation.update(deltaTime);
 
-        // 2. Sync Simulation State TO Colyseus State
-        this.syncStateToSchema();
+      // 2. Sync Simulation State TO Colyseus State
+      this.syncStateToSchema();
 
-        // 3. Update remaining time (do this after syncStateToSchema potentially modifies it)
-        if (this.state.remainingTime > 0) {
-            this.state.remainingTime = Math.max(0, this.state.remainingTime - deltaTime * 1000); // Update in ms
-        }
-
+      // 3. Update remaining time (do this after syncStateToSchema potentially modifies it)
+      if (this.state.remainingTime > 0) {
+        this.state.remainingTime = Math.max(
+          0,
+          this.state.remainingTime - deltaTime * 1000
+        ); // Update in ms
+      }
     } catch (error) {
-        console.error("[MyRoom] Simulation update error:", error);
-        // Consider locking the room or disconnecting clients on critical errors
+      console.error("[MyRoom] Simulation update error:", error);
+      // Consider locking the room or disconnecting clients on critical errors
     }
   }
 
@@ -208,57 +228,57 @@ export class MyRoom extends Room<MyRoomState> {
     console.log("[MyRoom] Session timer reset.");
 
     if (startImmediately) {
-        console.log("[MyRoom] Session timer started.");
-        // Set timeout for session end
-        this.sessionTimeout = setTimeout(() => {
-            this.endSession();
-        }, SESSION_DURATION);
+      console.log("[MyRoom] Session timer started.");
+      // Set timeout for session end
+      this.sessionTimeout = setTimeout(() => {
+        this.endSession();
+      }, SESSION_DURATION);
     } else {
-        this.sessionTimeout = null; // Ensure it's null if not started
+      this.sessionTimeout = null; // Ensure it's null if not started
     }
   }
 
   endSession() {
-     console.log("[MyRoom] Session Ended!");
-     this.broadcast("sessionEnd"); // Notify clients
-     this.state.remainingTime = 0;
-     if (this.sessionInterval) clearInterval(this.sessionInterval); // Stop game loop
-     if (this.sessionTimeout) clearTimeout(this.sessionTimeout);
-     this.sessionTimeout = null;
+    console.log("[MyRoom] Session Ended!");
+    this.broadcast("sessionEnd"); // Notify clients
+    this.state.remainingTime = 0;
+    if (this.sessionInterval) clearInterval(this.sessionInterval); // Stop game loop
+    if (this.sessionTimeout) clearTimeout(this.sessionTimeout);
+    this.sessionTimeout = null;
 
-     // Lock the room to prevent new joins?
-     // this.lock();
+    // Lock the room to prevent new joins?
+    // this.lock();
 
-     // Disconnect clients after a short delay
-     setTimeout(() => {
-         console.log("[MyRoom] Disconnecting clients after session end.");
-         this.disconnect(); // Colyseus handles cleanup via onLeave/onDispose
-     }, 5000); // 5 second delay
+    // Disconnect clients after a short delay
+    setTimeout(() => {
+      console.log("[MyRoom] Disconnecting clients after session end.");
+      this.disconnect(); // Colyseus handles cleanup via onLeave/onDispose
+    }, 5000); // 5 second delay
 
-     // Note: Server reset logic (clearing items/NPCs in simulation) might happen
-     // implicitly onDispose or could be triggered here if room persists.
+    // Note: Server reset logic (clearing items/NPCs in simulation) might happen
+    // implicitly onDispose or could be triggered here if room persists.
   }
 
   spawnItem(itemType: string, x: number, y: number, z: number) {
     try {
-        const itemEntity = this.simulation.addItem(x, y, z, itemType);
+      const itemEntity = this.simulation.addItem(x, y, z, itemType);
 
-        // Create corresponding state object - Use ECS entity ID as the key for simplicity for now
-        const itemStateKey = itemEntity.id.toString();
-        const itemState = new Item();
-        const simPosition = itemEntity.get(this.simulation.Position);
+      // Create corresponding state object - Use ECS entity ID as the key for simplicity for now
+      const itemStateKey = itemEntity.id.toString();
+      const itemState = new Item();
+      const simPosition = itemEntity.get(this.simulation.Position);
 
-        itemState.itemType = itemType;
-        itemState.position.x = simPosition.x;
-        itemState.position.y = simPosition.y;
-        itemState.position.z = simPosition.z;
+      itemState.itemType = itemType;
+      itemState.position.x = simPosition.x;
+      itemState.position.y = simPosition.y;
+      itemState.position.z = simPosition.z;
 
-        this.state.items.set(itemStateKey, itemState);
-        this.itemEntities.set(itemStateKey, itemEntity); // Map state key to ECS entity
+      this.state.items.set(itemStateKey, itemState);
+      this.itemEntities.set(itemStateKey, itemEntity); // Map state key to ECS entity
 
-        console.log(`[MyRoom] Spawned Item ${itemStateKey} in state.`);
+      console.log(`[MyRoom] Spawned Item ${itemStateKey} in state.`);
     } catch (error) {
-        console.error(`[MyRoom] Failed to spawn item:`, error)
+      console.error(`[MyRoom] Failed to spawn item:`, error);
     }
   }
 
@@ -285,51 +305,56 @@ export class MyRoom extends Room<MyRoomState> {
 
     // Sync Items (only needed if items can move or change state)
     this.state.items.forEach((itemState, itemStateKey) => {
-        const entity = this.itemEntities.get(itemStateKey);
-        if(entity) {
-            // If items had physics/movement, sync position like players
-            // If items change type/value, sync those properties
-            // Currently items are static, so less need to sync frequently unless created/destroyed
-        } else {
-            // Item exists in Colyseus state but not ECS? Remove from Colyseus state.
-            console.warn(`[Sync] Item ${itemStateKey} found in state but not ECS. Removing.`);
-            this.state.items.delete(itemStateKey);
-        }
+      const entity = this.itemEntities.get(itemStateKey);
+      if (entity) {
+        // If items had physics/movement, sync position like players
+        // If items change type/value, sync those properties
+        // Currently items are static, so less need to sync frequently unless created/destroyed
+      } else {
+        // Item exists in Colyseus state but not ECS? Remove from Colyseus state.
+        console.warn(
+          `[Sync] Item ${itemStateKey} found in state but not ECS. Removing.`
+        );
+        this.state.items.delete(itemStateKey);
+      }
     });
 
-     // Check ECS items that might have been removed by simulation but not yet from state
-     this.itemEntities.forEach((entity, itemStateKey) => {
-         if (!this.state.items.has(itemStateKey) && !entity.isDestroyed) {
-            // This case shouldn't happen if removal is handled correctly
-            // If item removed in simulation (e.g. collection), ensure it's removed from map too
-             console.warn(`[Sync] ECS Item ${entity.id} exists but not in state key map?`);
-         }
-         // If an item was collected/destroyed in simulation, the CollectionSystem should
-         // ideally emit an event or we check here. Let's assume Simulation.removeItem handles map cleanup.
-         if (entity.isDestroyed) {
-             if (this.state.items.has(itemStateKey)) {
-                 console.log(`[Sync] Removing destroyed item ${itemStateKey} from state.`);
-                 this.state.items.delete(itemStateKey);
-             }
-             this.itemEntities.delete(itemStateKey); // Clean up map
-         }
-     });
-
+    // Check ECS items that might have been removed by simulation but not yet from state
+    this.itemEntities.forEach((entity, itemStateKey) => {
+      if (!this.state.items.has(itemStateKey) && !entity.isDestroyed) {
+        // This case shouldn't happen if removal is handled correctly
+        // If item removed in simulation (e.g. collection), ensure it's removed from map too
+        console.warn(
+          `[Sync] ECS Item ${entity.id} exists but not in state key map?`
+        );
+      }
+      // If an item was collected/destroyed in simulation, the CollectionSystem should
+      // ideally emit an event or we check here. Let's assume Simulation.removeItem handles map cleanup.
+      if (entity.isDestroyed) {
+        if (this.state.items.has(itemStateKey)) {
+          console.log(
+            `[Sync] Removing destroyed item ${itemStateKey} from state.`
+          );
+          this.state.items.delete(itemStateKey);
+        }
+        this.itemEntities.delete(itemStateKey); // Clean up map
+      }
+    });
 
     // Sync NPCs (similar to players)
-     this.state.npcCollectors.forEach((npcState, npcStateKey) => {
-         const entity = this.npcEntities.get(npcStateKey);
-         if (entity) {
-             const simPosition = entity.get(this.simulation.Position);
-             const simInventory = entity.get(this.simulation.Inventory);
-             npcState.position.x = simPosition.x;
-             npcState.position.y = simPosition.y;
-             npcState.position.z = simPosition.z;
-             npcState.itemCount = simInventory.itemCount;
-         } else {
-            this.state.npcCollectors.delete(npcStateKey); // Clean up if entity missing
-         }
-     });
-     // Clean up npcEntities map if needed (similar to items)
+    this.state.npcCollectors.forEach((npcState, npcStateKey) => {
+      const entity = this.npcEntities.get(npcStateKey);
+      if (entity) {
+        const simPosition = entity.get(this.simulation.Position);
+        const simInventory = entity.get(this.simulation.Inventory);
+        npcState.position.x = simPosition.x;
+        npcState.position.y = simPosition.y;
+        npcState.position.z = simPosition.z;
+        npcState.itemCount = simInventory.itemCount;
+      } else {
+        this.state.npcCollectors.delete(npcStateKey); // Clean up if entity missing
+      }
+    });
+    // Clean up npcEntities map if needed (similar to items)
   }
 }
