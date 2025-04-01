@@ -12,8 +12,8 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md,html,css}\"",
     "check-format": "prettier --check \"**/*.{ts,js,json,md,html,css}\"",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "npx vitest run",
+    "test:watch": "npx vitest"
   },
   "keywords": [],
   "author": "",
