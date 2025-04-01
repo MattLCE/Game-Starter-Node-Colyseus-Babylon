@@ -12,8 +12,8 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md,html,css}\"",
     "check-format": "prettier --check \"**/*.{ts,js,json,md,html,css}\"",
-    "test": "npx vitest run",
-    "test:watch": "npx vitest"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -27,11 +27,6 @@
     "globals": "^16.0.0",
     "prettier": "^3.5.3",
     "vite": "^6.2.3",
-    "vitest": "^3.1.1"
-  },
-  "dependencies": {
-    "@dimforge/rapier3d-compat": "^0.15.0",
-    "prefix": "^1.0.0",
-    "server": "^1.0.41"
+    "vitest": "^3.0.9"
   }
 }

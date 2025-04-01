@@ -11,7 +11,3 @@ Code Formatting: Prettier
 Code Linting: ESLint
 
 Unit Testing: Vitest
-
-Entity-Component-System (ECS): geotic
-
-Physics: Rapier3D
