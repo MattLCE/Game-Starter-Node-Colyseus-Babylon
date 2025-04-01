@@ -151,70 +151,77 @@ export class Simulation {
     }
   };
 
-  // Placeholder Collection System
   CollectionSystem = class extends System {
-    // Query for entities that want to collect something AND have a position/inventory
-    private collectorQuery = this.query(
-      (e) =>
-        e.has(this.simulation.WantsToCollect) &&
-        e.has(this.simulation.Position) &&
-        e.has(this.simulation.Inventory)
-    );
-    private collectibleQuery = this.query(
-      (e) =>
-        e.has(this.simulation.CollectibleTag) && e.has(this.simulation.Position)
-    );
+      private collectorQuery = this.query(
+          (e) =>
+              e.has(this.simulation.WantsToCollect) &&
+              e.has(this.simulation.Position) &&
+              e.has(this.simulation.Inventory)
+      );
+      private collectibleQuery = this.query(
+          (e) =>
+              e.has(this.simulation.CollectibleTag) && e.has(this.simulation.Position)
+      );
 
-    execute(deltaTime: number): void {
-            const entitiesToProcess = this.collectorQuery.get(); // Get entities *before* potentially modifying/destroying
+      execute(deltaTime: number): void {
+          const entitiesToProcess = this.collectorQuery.get();
+          console.log(`[Sim] CollectionSystem: Processing ${entitiesToProcess.length} entities with WantsToCollect`);
+          if (entitiesToProcess.length === 0) {
+              console.log(`[Sim] No entities to process for collection`);
+              return;
+          }
 
-            entitiesToProcess.forEach((collector) => {
-                // Double check component exists before getting (safer)
-                if (!collector.has(this.simulation.WantsToCollect)) return; 
+          entitiesToProcess.forEach((collector) => {
+              if (!collector.has(this.simulation.WantsToCollect)) {
+                  console.log(`[Sim] Skipping entity ${collector.id} - no WantsToCollect`);
+                  return;
+              }
 
-                const collectorPos = collector.get(this.simulation.Position);
-                const collectorInv = collector.get(this.simulation.Inventory);
-                const request = collector.get(this.simulation.WantsToCollect);
-                const targetItemId = request.targetItemId; // This is the ECS Entity ID
+              const collectorPos = collector.get(this.simulation.Position);
+              const collectorInv = collector.get(this.simulation.Inventory);
+              const request = collector.get(this.simulation.WantsToCollect);
+              const targetItemId = request.targetItemId;
 
-                const targetItem = this.simulation.ecsWorld.getEntity(targetItemId);
+              const targetItem = this.simulation.ecsWorld.getEntity(targetItemId);
 
-                let collected = false; // Flag to track if collection happened
+              let collected = false;
 
-                // Validate target exists, is collectible, and hasn't been destroyed already
-                if (targetItem && targetItem.has(this.simulation.CollectibleTag) && !targetItem.isDestroyed) {
-                    const itemPos = targetItem.get(this.simulation.Position);
+              if (targetItem && targetItem.has(this.simulation.CollectibleTag) && !targetItem.isDestroyed) {
+                  const itemPos = targetItem.get(this.simulation.Position);
 
-                    // Distance Check (Manhattan distance check can be slightly faster if needed, but Euclidean is fine)
-                    const dx = collectorPos.x - itemPos.x;
-                    const dy = collectorPos.y - itemPos.y; // Consider if Y distance matters
-                    const dz = collectorPos.z - itemPos.z;
-                    const distanceSq = dx*dx + dy*dy + dz*dz; // Check squared distance to avoid sqrt
+                  const dx = collectorPos.x - itemPos.x;
+                  const dy = collectorPos.y - itemPos.y;
+                  const dz = collectorPos.z - itemPos.z;
+                  const distanceSq = dx*dx + dy*dy + dz*dz;
+                  const COLLECTION_DISTANCE = 1.5;
+                  const COLLECTION_DISTANCE_SQ = COLLECTION_DISTANCE * COLLECTION_DISTANCE;
+                  console.log(`[Sim] Distance check: dx=${dx}, dy=${dy}, dz=${dz}, distanceSq=${distanceSq}, threshold=${COLLECTION_DISTANCE_SQ}`);
 
-                    const COLLECTION_DISTANCE = 1.5; 
-                    const COLLECTION_DISTANCE_SQ = COLLECTION_DISTANCE * COLLECTION_DISTANCE;
+                  if (distanceSq < COLLECTION_DISTANCE_SQ) {
+                      console.log(`[Sim] Entity ${collector.id} collecting item ${targetItemId}`);
+                      collectorInv.itemCount += 1;
+                      console.log(`[Sim] Inventory updated to ${collectorInv.itemCount}`);
+                      this.simulation.removeItem(targetItem);
+                      console.log(`[Sim] Item ${targetItemId} destroyed: ${targetItem.isDestroyed}`);
+                      collected = true;
+                  } else {
+                      console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (too far)`);
+                  }
+              } else {
+                  console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (invalid target)`);
+              }
 
-                    if (distanceSq < COLLECTION_DISTANCE_SQ) {
-                        console.log(`[Sim] Entity ${collector.id} collecting item ${targetItemId}`);
-                        collectorInv.itemCount += 1; // Add to inventory
+              collector.remove(this.simulation.WantsToCollect);
+              if (collector.has(this.simulation.WantsToCollect)) {
+                  console.error(`[Sim] Failed to remove WantsToCollect from entity ${collector.id}`);
+              } else {
+                  console.log(`[Sim] Successfully removed WantsToCollect from entity ${collector.id}`);
+              }
+          });
 
-                        // Use the simulation's removeItem helper to handle cleanup
-                        this.simulation.removeItem(targetItem); 
-                        collected = true;
-                    } else {
-                        // Optional: Log distance failure
-                        // console.log(`[Sim] Entity ${collector.id} failed collect item ${targetItemId} (Distance: ${Math.sqrt(distanceSq).toFixed(2)})`);
-                    }
-                } else {
-                     // Optional: Log reason for failure (item doesn't exist, not collectible, already gone)
-                     // console.warn(`[Sim] Entity ${collector.id} failed collect item ${targetItemId} (Invalid Target: ${targetItem}, Collectible: ${targetItem?.has(this.simulation.CollectibleTag)}, Destroyed: ${targetItem?.isDestroyed})`);
-                }
-
-                // Always remove the request component after processing
-                collector.remove(this.simulation.WantsToCollect); 
-            });
-        }
-    };
+          this.simulation.ecsWorld.maintain();
+      }
+  };
 
   // Constructor initializes worlds and registers components/systems
   constructor() {
