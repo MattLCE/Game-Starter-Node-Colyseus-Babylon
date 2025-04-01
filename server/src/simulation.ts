@@ -1,391 +1,286 @@
 // server/src/simulation.ts
-const { World, Entity, System, Component, Query } = require("geotic"); // Try CommonJS require
-import geotic from 'geotic'; // Try default import
-//const { World, Entity, System, Component, Query } = geotic; // Destructure from default
-import * as RAPIER from "@dimforge/rapier3d-compat"; 
+import { World, Entity, System, Component, Query } from 'geotic'; // USE NAMED IMPORTS
 
-// Add this console log:
-console.log(">>> Simulation File: Geotic System loaded:", System); 
+import * as RAPIER from "@dimforge/rapier3d-compat";
 
-// Re-usable constants
+// Add this new diagnostic log:
+console.log(">>> Simulation File: Attempting named import. System is:", System);
+
+// --- Reusable constants ---
 const PHYSICS_TIMESTEP = 1 / 60; // Run physics at 60Hz
 
 // --- Core Simulation Class ---
 // This class encapsulates the ECS world and the Physics world
 export class Simulation {
-  public ecsWorld: World;
-  public physicsWorld: RAPIER.World;
-  private eventQueue: RAPIER.EventQueue; // To handle collision events later
+    public ecsWorld: World;
+    public physicsWorld: RAPIER.World;
+    private eventQueue: RAPIER.EventQueue; // To handle collision events later
 
-  // --- Geotic Components ---
-  // Define components using Geotic's Component class or simple objects
-  // Best practice: Use classes for components that might have methods later
-  // Use simple types or interfaces for pure data components
-
-  // Basic spatial components
-  Position = class extends Component {
-    x = 0;
-    y = 0;
-    z = 0;
-
-    static properties = {
-      x: 0,
-      y: 0,
-      z: 0,
+    // --- Geotic Components ---
+    // Define components using Geotic's Component class or simple objects
+    Position = class extends Component {
+        x = 0;
+        y = 0;
+        z = 0;
+        static properties = { x: 0, y: 0, z: 0 };
     };
-  };
 
-  Velocity = class extends Component {
-    x = 0;
-    y = 0;
-    z = 0;
-
-    static properties = {
-      x: 0,
-      y: 0,
-      z: 0,
+    Velocity = class extends Component {
+        x = 0;
+        y = 0;
+        z = 0;
+        static properties = { x: 0, y: 0, z: 0 };
     };
-  };
 
-  // Link to Rapier physics body
-  PhysicsBody = class extends Component {
-    // Rapier's rigid body handle (identifies the body in the physics world)
-    bodyHandle: number = -1;
-    // Rapier's collider handle (identifies the shape attached to the body)
-    colliderHandle: number = -1;
-
-    static properties = {
-      bodyHandle: -1,
-      colliderHandle: -1,
+    PhysicsBody = class extends Component {
+        bodyHandle: number = -1;
+        colliderHandle: number = -1;
+        static properties = { bodyHandle: -1, colliderHandle: -1 };
     };
-  };
 
-  // --- Tag Components (Mark entities with specific roles) ---
-  PlayerTag = class extends Component {};
-  ItemTag = class extends Component {};
-  NpcTag = class extends Component {}; // For the validation feature later
-  CollectibleTag = class extends Component {}; // Marks items that can be picked up
+    // --- Tag Components ---
+    PlayerTag = class extends Component {};
+    ItemTag = class extends Component {};
+    NpcTag = class extends Component {}; // For the validation feature later
+    CollectibleTag = class extends Component {}; // Marks items that can be picked up
 
-  // --- State/Gameplay Components ---
-  Inventory = class extends Component {
-    itemCount: number = 0;
-    // Later: items: Map<string, number> = new Map();
-
-    static properties = {
-      itemCount: 0,
+    // --- State/Gameplay Components ---
+    Inventory = class extends Component {
+        itemCount: number = 0;
+        static properties = { itemCount: 0 };
     };
-  };
 
-  // Component added when an entity attempts collection
-  // This is transient, processed and removed by a system
-  WantsToCollect = class extends Component {
-    targetItemId: number = -1; // ECS Entity ID of the item to collect
-    static properties = { targetItemId: -1 };
-  };
+    WantsToCollect = class extends Component {
+        targetItemId: number = -1; // ECS Entity ID of the item to collect
+        static properties = { targetItemId: -1 };
+    };
 
-  // --- Geotic Systems ---
-  // Define systems that operate on entities with specific components
+    // --- Geotic Systems ---
+    // Access simulation via this.world.simulation if needed
+    // Systems have `this.world` automatically
 
-  // System to apply ECS velocity/position changes TO Rapier before physics step
-  PhysicsIntegrationSystem = class extends System {
-    // Query for entities that have velocity and a physics body
-    private query = this.query(
-      (e) =>
-        e.has(this.simulation.Velocity) && e.has(this.simulation.PhysicsBody)
-    );
-
-    // Note: This is a simplified integration. Real integration might involve
-    // more complex force application, checking if body is dynamic etc.
-    execute(deltaTime: number): void {
-      this.query.get().forEach((entity) => {
-        const vel = entity.get(this.simulation.Velocity);
-        const phys = entity.get(this.simulation.PhysicsBody);
-        const rigidBody = this.simulation.physicsWorld.getRigidBody(
-          phys.bodyHandle
-        );
-
-        if (rigidBody && rigidBody.isDynamic()) {
-          // Only apply to dynamic bodies
-          rigidBody.setLinvel({ x: vel.x, y: vel.y, z: vel.z }, true);
-          // Note: For position changes (teleports), you'd use rigidBody.setTranslation(...)
-          // but typically physics handles position updates based on velocity.
+    PhysicsIntegrationSystem = class extends System {
+        // Get simulation instance from the world object where it's attached
+        private get simulation(): Simulation {
+            return (this.world as any).simulation;
         }
-      });
-    }
-  };
+        private query = this.query((e: Entity) => e.has(this.simulation.Velocity) && e.has(this.simulation.PhysicsBody));
 
-  // System to read Rapier positions/rotations back INTO ECS after physics step
-  PhysicsSyncSystem = class extends System {
-    // Query for entities that have position and a physics body
-    private query = this.query(
-      (e) =>
-        e.has(this.simulation.Position) && e.has(this.simulation.PhysicsBody)
-    );
-
-    execute(deltaTime: number): void {
-      this.query.get().forEach((entity) => {
-        const pos = entity.get(this.simulation.Position);
-        const phys = entity.get(this.simulation.PhysicsBody);
-        const rigidBody = this.simulation.physicsWorld.getRigidBody(
-          phys.bodyHandle
-        );
-
-        if (rigidBody) {
-          const rapierPos = rigidBody.translation();
-          pos.x = rapierPos.x;
-          pos.y = rapierPos.y;
-          pos.z = rapierPos.z;
-          // TODO: Sync rotation as well if needed (using rigidBody.rotation())
+        execute(deltaTime: number): void {
+            this.query.get().forEach((entity) => {
+                const vel = entity.get(this.simulation.Velocity);
+                const phys = entity.get(this.simulation.PhysicsBody);
+                // Access physicsWorld via the simulation instance stored on the world
+                const rigidBody = this.simulation.physicsWorld.getRigidBody(phys.bodyHandle);
+                if (rigidBody && rigidBody.isDynamic()) {
+                    rigidBody.setLinvel({ x: vel.x, y: vel.y, z: vel.z }, true);
+                }
+            });
         }
-      });
+    };
+
+    PhysicsSyncSystem = class extends System {
+         private get simulation(): Simulation {
+            return (this.world as any).simulation;
+        }
+        private query = this.query((e: Entity) => e.has(this.simulation.Position) && e.has(this.simulation.PhysicsBody));
+
+        execute(deltaTime: number): void {
+            this.query.get().forEach((entity) => {
+                const pos = entity.get(this.simulation.Position);
+                const phys = entity.get(this.simulation.PhysicsBody);
+                const rigidBody = this.simulation.physicsWorld.getRigidBody(phys.bodyHandle);
+                if (rigidBody) {
+                    const rapierPos = rigidBody.translation();
+                    pos.x = rapierPos.x; pos.y = rapierPos.y; pos.z = rapierPos.z;
+                }
+            });
+        }
+    };
+
+    MovementSystem = class extends System {
+         private get simulation(): Simulation {
+            return (this.world as any).simulation;
+        }
+        private query = this.query((e: Entity) => e.has(this.simulation.PlayerTag) && e.has(this.simulation.Velocity));
+        execute(deltaTime: number): void { /* Placeholder */ }
+    };
+
+    CollectionSystem = class extends System {
+        private get simulation(): Simulation {
+            return (this.world as any).simulation;
+        }
+        private collectorQuery = this.query((e: Entity) => e.has(this.simulation.WantsToCollect) && e.has(this.simulation.Position) && e.has(this.simulation.Inventory));
+        private collectibleQuery = this.query((e: Entity) => e.has(this.simulation.CollectibleTag) && e.has(this.simulation.Position));
+
+        execute(deltaTime: number): void {
+            const entitiesToProcess = this.collectorQuery.get();
+             // console.log(`[Sim] CollectionSystem: Processing ${entitiesToProcess.length} entities with WantsToCollect`); // Keep logs for now
+             if (entitiesToProcess.length === 0) return;
+
+
+            entitiesToProcess.forEach((collector) => {
+                if (!collector.has(this.simulation.WantsToCollect)) return;
+
+
+                const collectorPos = collector.get(this.simulation.Position);
+                const collectorInv = collector.get(this.simulation.Inventory);
+                const request = collector.get(this.simulation.WantsToCollect);
+                const targetItemId = request.targetItemId;
+
+                // Use this.world to get entity, consistent with system context
+                const targetItem = this.world.getEntity(targetItemId);
+
+                let collected = false;
+
+                if (targetItem && targetItem.has(this.simulation.CollectibleTag) && !targetItem.isDestroyed) {
+                    const itemPos = targetItem.get(this.simulation.Position);
+                    const dx = collectorPos.x - itemPos.x;
+                    const dy = collectorPos.y - itemPos.y;
+                    const dz = collectorPos.z - itemPos.z;
+                    const distanceSq = dx*dx + dy*dy + dz*dz;
+                    const COLLECTION_DISTANCE = 1.5;
+                    const COLLECTION_DISTANCE_SQ = COLLECTION_DISTANCE * COLLECTION_DISTANCE;
+                    // console.log(`[Sim] Distance check: dx=${dx}, dy=${dy}, dz=${dz}, distanceSq=${distanceSq}, threshold=${COLLECTION_DISTANCE_SQ}`);
+
+                    if (distanceSq < COLLECTION_DISTANCE_SQ) {
+                        // console.log(`[Sim] Entity ${collector.id} collecting item ${targetItemId}`);
+                        collectorInv.itemCount += 1;
+                        // console.log(`[Sim] Inventory updated to ${collectorInv.itemCount}`);
+                        // Use the simulation instance helper method to remove item correctly
+                        this.simulation.removeItem(targetItem);
+                        // console.log(`[Sim] Item ${targetItemId} destroyed: ${targetItem.isDestroyed}`);
+                        collected = true;
+                    } else {
+                        // console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (too far)`);
+                    }
+                } else {
+                   // console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (invalid target)`);
+                }
+
+                collector.remove(this.simulation.WantsToCollect);
+                // if (collector.has(this.simulation.WantsToCollect)) {
+                //     console.error(`[Sim] Failed to remove WantsToCollect from entity ${collector.id}`);
+                // } else {
+                //     console.log(`[Sim] Successfully removed WantsToCollect from entity ${collector.id}`);
+                // }
+            });
+        }
+    };
+
+    constructor() {
+        this.ecsWorld = new World();
+        this.eventQueue = new RAPIER.EventQueue(true);
+        const gravity = { x: 0.0, y: -9.81, z: 0.0 };
+        this.physicsWorld = new RAPIER.World(gravity);
+
+        // Attach the simulation instance to the world object itself
+        // so systems can access it via `this.world.simulation`
+        (this.ecsWorld as any).simulation = this;
+
+        // Register Components
+        this.ecsWorld.register(this.Position);
+        this.ecsWorld.register(this.Velocity);
+        this.ecsWorld.register(this.PhysicsBody);
+        this.ecsWorld.register(this.PlayerTag);
+        this.ecsWorld.register(this.ItemTag);
+        this.ecsWorld.register(this.NpcTag);
+        this.ecsWorld.register(this.CollectibleTag);
+        this.ecsWorld.register(this.Inventory);
+        this.ecsWorld.register(this.WantsToCollect);
+
+        // Register Systems (No extra arguments needed here)
+        this.ecsWorld.register(this.PhysicsIntegrationSystem);
+        this.ecsWorld.register(this.MovementSystem);
+        this.ecsWorld.register(this.CollectionSystem);
+        this.ecsWorld.register(this.PhysicsSyncSystem);
     }
-  };
 
-  // Placeholder Movement System (Will handle input later)
-  MovementSystem = class extends System {
-    private query = this.query(
-      (e) => e.has(this.simulation.PlayerTag) && e.has(this.simulation.Velocity)
-    );
+    update(deltaTime: number): void {
+        // Execute systems in a specific order relative to physics step
 
-    execute(deltaTime: number): void {
-      // Later: Read player input component, apply forces/set velocity
-      this.query.get().forEach((entity) => {
-        // Example: Apply simple gravity if not handled by Rapier directly
-        // const vel = entity.get(this.simulation.Velocity);
-        // vel.y -= 9.81 * deltaTime;
-      });
+        // Pre-physics systems
+        this.ecsWorld.getSystem(this.PhysicsIntegrationSystem).execute(deltaTime);
+        this.ecsWorld.getSystem(this.MovementSystem).execute(deltaTime);
+        // ... other pre-physics systems
+
+        // Physics step
+        this.physicsWorld.step(this.eventQueue);
+
+        // Process physics events (optional)
+        // this.eventQueue.drainCollisionEvents(...)
+
+        // Post-physics systems
+        this.ecsWorld.getSystem(this.PhysicsSyncSystem).execute(deltaTime);
+        this.ecsWorld.getSystem(this.CollectionSystem).execute(deltaTime);
+        // ... other post-physics systems
+
+        // Geotic internal cleanup (if needed, often automatic)
+        // this.ecsWorld.maintain();
     }
-  };
 
-  CollectionSystem = class extends System {
-      private collectorQuery = this.query(
-          (e) =>
-              e.has(this.simulation.WantsToCollect) &&
-              e.has(this.simulation.Position) &&
-              e.has(this.simulation.Inventory)
-      );
-      private collectibleQuery = this.query(
-          (e) =>
-              e.has(this.simulation.CollectibleTag) && e.has(this.simulation.Position)
-      );
+    // --- Entity Management Methods ---
+    addPlayer(clientId: string): Entity {
+        const entity = this.ecsWorld.create();
+        entity.add(this.PlayerTag);
+        entity.add(this.Position, { x: 0, y: 1, z: 0 });
+        entity.add(this.Velocity);
+        entity.add(this.Inventory);
 
-      execute(deltaTime: number): void {
-          const entitiesToProcess = this.collectorQuery.get();
-          console.log(`[Sim] CollectionSystem: Processing ${entitiesToProcess.length} entities with WantsToCollect`);
-          if (entitiesToProcess.length === 0) {
-              console.log(`[Sim] No entities to process for collection`);
-              return;
-          }
+        const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 1, 0).setLinvel(0, 0, 0);
+        const rigidBody = this.physicsWorld.createRigidBody(rigidBodyDesc);
+        const colliderDesc = RAPIER.ColliderDesc.capsule(0.5, 0.5).setRestitution(0.1).setFriction(0.5);
+        const collider = this.physicsWorld.createCollider(colliderDesc, rigidBody);
 
-          entitiesToProcess.forEach((collector) => {
-              if (!collector.has(this.simulation.WantsToCollect)) {
-                  console.log(`[Sim] Skipping entity ${collector.id} - no WantsToCollect`);
-                  return;
-              }
+        entity.add(this.PhysicsBody, { bodyHandle: rigidBody.handle, colliderHandle: collider.handle });
+        // console.log(`[Sim] Added Player ${entity.id} (Client: ${clientId}) with Body Handle ${rigidBody.handle}`);
+        return entity;
+    }
 
-              const collectorPos = collector.get(this.simulation.Position);
-              const collectorInv = collector.get(this.simulation.Inventory);
-              const request = collector.get(this.simulation.WantsToCollect);
-              const targetItemId = request.targetItemId;
+    addItem(x: number, y: number, z: number, itemType: string): Entity {
+        const entity = this.ecsWorld.create();
+        entity.add(this.ItemTag);
+        entity.add(this.CollectibleTag);
+        entity.add(this.Position, { x, y, z });
+        // Items are non-physical for now
+        // console.log(`[Sim] Added Item ${entity.id} of type ${itemType} at (${x},${y},${z})`);
+        return entity;
+    }
 
-              const targetItem = this.simulation.ecsWorld.getEntity(targetItemId);
+    removeEntity(entity: Entity): void {
+        if (!entity || entity.isDestroyed) return; // Prevent errors
 
-              let collected = false;
+        if (entity.has(this.PhysicsBody)) {
+            try {
+                const phys = entity.get(this.PhysicsBody);
+                if (this.physicsWorld.getCollider(phys.colliderHandle)) {
+                     this.physicsWorld.removeCollider(phys.colliderHandle, false);
+                }
+                 if (this.physicsWorld.getRigidBody(phys.bodyHandle)) {
+                     this.physicsWorld.removeRigidBody(phys.bodyHandle);
+                 }
+            } catch (e) {
+                console.warn(`[Sim] Error removing physics for entity ${entity.id}: ${e}`);
+            }
+        }
+        entity.destroy(); // Remove from ECS world
+    }
 
-              if (targetItem && targetItem.has(this.simulation.CollectibleTag) && !targetItem.isDestroyed) {
-                  const itemPos = targetItem.get(this.simulation.Position);
+    removePlayer(entity: Entity) {
+        if(entity && entity.has(this.PlayerTag) && !entity.isDestroyed) {
+           // console.log(`[Sim] Removing Player ${entity.id}`);
+            this.removeEntity(entity);
+        } else if (entity && !entity.has(this.PlayerTag)) {
+            console.warn(`[Sim] Attempted to remove non-player entity ${entity?.id} as player.`);
+        }
+    }
 
-                  const dx = collectorPos.x - itemPos.x;
-                  const dy = collectorPos.y - itemPos.y;
-                  const dz = collectorPos.z - itemPos.z;
-                  const distanceSq = dx*dx + dy*dy + dz*dz;
-                  const COLLECTION_DISTANCE = 1.5;
-                  const COLLECTION_DISTANCE_SQ = COLLECTION_DISTANCE * COLLECTION_DISTANCE;
-                  console.log(`[Sim] Distance check: dx=${dx}, dy=${dy}, dz=${dz}, distanceSq=${distanceSq}, threshold=${COLLECTION_DISTANCE_SQ}`);
-
-                  if (distanceSq < COLLECTION_DISTANCE_SQ) {
-                      console.log(`[Sim] Entity ${collector.id} collecting item ${targetItemId}`);
-                      collectorInv.itemCount += 1;
-                      console.log(`[Sim] Inventory updated to ${collectorInv.itemCount}`);
-                      this.simulation.removeItem(targetItem);
-                      console.log(`[Sim] Item ${targetItemId} destroyed: ${targetItem.isDestroyed}`);
-                      collected = true;
-                  } else {
-                      console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (too far)`);
-                  }
-              } else {
-                  console.log(`[Sim] Entity ${collector.id} failed to collect item ${targetItemId} (invalid target)`);
-              }
-
-              collector.remove(this.simulation.WantsToCollect);
-              if (collector.has(this.simulation.WantsToCollect)) {
-                  console.error(`[Sim] Failed to remove WantsToCollect from entity ${collector.id}`);
-              } else {
-                  console.log(`[Sim] Successfully removed WantsToCollect from entity ${collector.id}`);
-              }
-          });
-
-          this.simulation.ecsWorld.maintain();
-      }
-  };
-
-  // Constructor initializes worlds and registers components/systems
-  constructor() {
-    this.ecsWorld = new World();
-    this.eventQueue = new RAPIER.EventQueue(true); // For collisions
-
-    // Define gravity for the physics simulation
-    const gravity = { x: 0.0, y: -9.81, z: 0.0 };
-    this.physicsWorld = new RAPIER.World(gravity);
-
-    // Register Components with the ECS World
-    this.ecsWorld.register(this.Position);
-    this.ecsWorld.register(this.Velocity);
-    this.ecsWorld.register(this.PhysicsBody);
-    this.ecsWorld.register(this.PlayerTag);
-    this.ecsWorld.register(this.ItemTag);
-    this.ecsWorld.register(this.NpcTag);
-    this.ecsWorld.register(this.CollectibleTag);
-    this.ecsWorld.register(this.Inventory);
-    this.ecsWorld.register(this.WantsToCollect);
-
-    // Register Systems with the ECS World
-    // Execution order can matter! Define stages or rely on Geotic's resolution.
-    // Let's assume Geotic runs them in registration order for now.
-    this.ecsWorld.register(this.PhysicsIntegrationSystem, { simulation: this });
-    this.ecsWorld.register(this.MovementSystem, { simulation: this });
-    this.ecsWorld.register(this.CollectionSystem, { simulation: this });
-    // IMPORTANT: PhysicsSyncSystem needs to run AFTER physicsWorld.step()
-    this.ecsWorld.register(this.PhysicsSyncSystem, { simulation: this });
-  }
-
-  // Main simulation update function, called by the Colyseus room's game loop
-  update(deltaTime: number): void {
-    // 1. Run ECS systems that should happen BEFORE physics
-    //    (e.g., applying inputs/forces to physics bodies)
-    this.ecsWorld.getSystem(this.PhysicsIntegrationSystem).execute(deltaTime);
-    this.ecsWorld.getSystem(this.MovementSystem).execute(deltaTime);
-    // Add other pre-physics systems here (e.g., AI decision making)
-
-    // 2. Step the Physics World
-    this.physicsWorld.step(this.eventQueue);
-
-    // 3. Process Physics Events (e.g., collisions) - TODO later
-    // this.eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-    //    console.log(`Collision detected between ${handle1} and ${handle2}, started: ${started}`);
-    //    // Find corresponding ECS entities and handle collision logic
-    // });
-
-    // 4. Run ECS systems that should happen AFTER physics
-    //    (e.g., syncing physics state back to ECS, handling collections)
-    this.ecsWorld.getSystem(this.PhysicsSyncSystem).execute(deltaTime);
-    this.ecsWorld.getSystem(this.CollectionSystem).execute(deltaTime);
-    // Add other post-physics systems here
-
-    // Note: Geotic's world.step(deltaTime) might run all registered systems.
-    // If precise ordering between physics steps is needed, manually call
-    // system.execute() in the desired order instead of world.step().
-    // For now, calling individual systems gives explicit control.
-  }
-
-  // --- Entity Management Methods ---
-
-  // Creates a player entity in ECS and a corresponding physics body
-  addPlayer(clientId: string): Entity {
-    const entity = this.ecsWorld.create();
-    entity.add(this.PlayerTag);
-    entity.add(this.Position, { x: 0, y: 1, z: 0 }); // Spawn position
-    entity.add(this.Velocity);
-    entity.add(this.Inventory);
-
-    // Create Rapier physics body
-    const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(0, 1, 0) // Initial position MUST match ECS
-      .setLinvel(0, 0, 0); // Initial velocity
-    const rigidBody = this.physicsWorld.createRigidBody(rigidBodyDesc);
-
-    // Create Rapier collider (e.g., a capsule)
-    const colliderDesc = RAPIER.ColliderDesc.capsule(0.5, 0.5) // Height 1, radius 0.5
-      .setRestitution(0.1) // Bounciness
-      .setFriction(0.5);
-    const collider = this.physicsWorld.createCollider(colliderDesc, rigidBody);
-
-    // Link ECS entity to physics body using PhysicsBody component
-    entity.add(this.PhysicsBody, {
-      bodyHandle: rigidBody.handle,
-      colliderHandle: collider.handle,
-    });
-
-    console.log(
-      `[Sim] Added Player ${entity.id} (Client: ${clientId}) with Body Handle ${rigidBody.handle}`
-    );
-    return entity;
-  }
-
-  // Creates an item entity in ECS and a corresponding physics body
-  addItem(x: number, y: number, z: number, itemType: string): Entity {
-    const entity = this.ecsWorld.create();
-    entity.add(this.ItemTag);
-    entity.add(this.CollectibleTag);
-    entity.add(this.Position, { x, y, z });
-    // Maybe add Velocity if items can be moved by physics?
-
-    // Create Rapier physics body (e.g., static or dynamic sphere)
-    // Let's make items static for now
-    // const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z);
-    // If dynamic: const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z);
-    // For simplicity, let's make items non-physical initially, only Position matters
-    // If physics needed later, uncomment and create body/collider like addPlayer
-    /*
-    const rigidBody = this.physicsWorld.createRigidBody(rigidBodyDesc);
-    const colliderDesc = RAPIER.ColliderDesc.ball(0.3).setRestitution(0.7);
-    const collider = this.physicsWorld.createCollider(colliderDesc, rigidBody);
-    entity.add(this.PhysicsBody, {
-        bodyHandle: rigidBody.handle,
-        colliderHandle: collider.handle
-    });
-    */
-    console.log(
-      `[Sim] Added Item ${entity.id} of type ${itemType} at (${x},${y},${z})`
-    );
-    return entity;
-  }
-
-  // Removes an entity from ECS and its physics body from Rapier
-  removeEntity(entity: Entity): void {
-      // No console log needed here, let caller log context
-      if (entity.has(this.PhysicsBody)) {
-          try {
-              const phys = entity.get(this.PhysicsBody);
-              // Check if handles are valid before removing
-              if (phys.colliderHandle !== -1) this.physicsWorld.removeCollider(phys.colliderHandle, false); // false = don't wake bodies
-              if (phys.bodyHandle !== -1) this.physicsWorld.removeRigidBody(phys.bodyHandle);
-          } catch (e) {
-              console.warn(`[Sim] Error removing physics for entity ${entity.id}: ${e}`);
-              // Might happen if body was already removed
-          }
-      }
-       if (!entity.isDestroyed) { // Avoid double-destroy
-          entity.destroy(); // Remove from ECS world
-       }
-  }
-
-  // Helper for specific removals if needed
-  removePlayer(entity: Entity) {
-      if(entity && entity.has(this.PlayerTag) && !entity.isDestroyed) {
-          console.log(`[Sim] Removing Player ${entity.id}`);
-          this.removeEntity(entity);
-      } else if (entity && !entity.has(this.PlayerTag)) {
-          console.warn(`[Sim] Attempted to remove non-player entity ${entity?.id} as player.`);
-      }
-  }
-
-  removeItem(entity: Entity) {
-      if(entity && entity.has(this.ItemTag) && !entity.isDestroyed) {
-          console.log(`[Sim] Removing Item ${entity.id}`);
-          this.removeEntity(entity);
-      } else if (entity && !entity.has(this.ItemTag)) {
-          console.warn(`[Sim] Attempted to remove non-item entity ${entity?.id} as item.`);
-      }
-  }
+    removeItem(entity: Entity) {
+        if(entity && entity.has(this.ItemTag) && !entity.isDestroyed) {
+           // console.log(`[Sim] Removing Item ${entity.id}`);
+            this.removeEntity(entity);
+        } else if (entity && !entity.has(this.ItemTag)) {
+            console.warn(`[Sim] Attempted to remove non-item entity ${entity?.id} as item.`);
+        }
+    }
 }
