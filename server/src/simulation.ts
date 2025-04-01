@@ -1,5 +1,11 @@
-import { World, Entity, System, Component, Query } from "geotic";
-import * as RAPIER from "@dimforge/rapier3d-compat"; // Physics engine
+// server/src/simulation.ts
+const { World, Entity, System, Component, Query } = require("geotic"); // Try CommonJS require
+import geotic from 'geotic'; // Try default import
+//const { World, Entity, System, Component, Query } = geotic; // Destructure from default
+import * as RAPIER from "@dimforge/rapier3d-compat"; 
+
+// Add this console log:
+console.log(">>> Simulation File: Geotic System loaded:", System); 
 
 // Re-usable constants
 const PHYSICS_TIMESTEP = 1 / 60; // Run physics at 60Hz

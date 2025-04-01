@@ -1,6 +1,13 @@
+// server/src/simulation.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Simulation } from './simulation'; // Adjust path if needed
+import { Simulation } from './simulation';
 import type { Entity } from 'geotic';
+import { World, System as GeoticSystem, Component as GeoticComponent } from 'geotic'; // Import directly here for logging
+
+// Add this console log right after imports:
+console.log(">>> Vitest: Geotic System loaded in test file:", GeoticSystem); 
+console.log(">>> Vitest: Geotic Component loaded in test file:", GeoticComponent); 
+console.log(">>> Vitest: Geotic World loaded in test file:", World); 
 
 describe('Simulation Logic', () => {
   let sim: Simulation;
