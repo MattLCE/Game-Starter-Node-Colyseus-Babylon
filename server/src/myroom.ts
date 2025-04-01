@@ -1,33 +1,44 @@
 // server/src/myroom.ts
 import { Room, Client } from "@colyseus/core";
 import { Schema, MapSchema, type } from "@colyseus/schema";
-import { World as EcsWorld, defineComponent, addComponent, removeComponent, defineQuery, enterQuery, exitQuery, hasComponent, Types } from "bitecs";
+// Correct bitecs imports for v1 style
+import {
+    IWorld, // Use IWorld interface for type annotation
+    defineComponent,
+    addComponent,
+    removeComponent,
+    defineQuery,
+    enterQuery,
+    exitQuery,
+    hasComponent,
+    Types,
+    addEntity, // Import addEntity
+    Query, // Import Query type
+    EnterQuery, // Import EnterQuery type
+    ExitQuery, // Import ExitQuery type
+} from "bitecs";
 import RAPIER from "@dimforge/rapier3d-compat";
 
 // -- ECS Components --
-// Using simple objects for components initially for easier state sync.
-// For performance, you might use TypedArrays later, but that complicates state sync.
-
 const Vector3Schema = {
     x: Types.f32,
     y: Types.f32,
     z: Types.f32,
 };
 const Position = defineComponent(Vector3Schema);
-const Velocity = defineComponent(Vector3Schema); // Rapier handles velocity internally, maybe not needed in ECS directly yet
+const Velocity = defineComponent(Vector3Schema);
 const PlayerInput = defineComponent({
-    left: Types.ui8, // 0 or 1
+    left: Types.ui8,
     right: Types.ui8,
     forward: Types.ui8,
     backward: Types.ui8,
 });
-// We need a way to store the Rapier handle associated with the ECS entity
 const RapierRigidBodyHandle = defineComponent({ handle: Types.ui32 });
 
-// -- Colyseus State --
+// -- Colyseus State -- (Keep as is)
 export class PlayerState extends Schema {
     @type("number") x: number = 0;
-    @type("number") y: number = 0; // Add Y if you have vertical movement/gravity
+    @type("number") y: number = 0;
     @type("number") z: number = 0;
 }
 
@@ -37,45 +48,43 @@ export class MyRoomState extends Schema {
 
 // -- Room Logic --
 export class MyRoom extends Room<MyRoomState> {
-    private ecsWorld: EcsWorld;
-    private rapierWorld: RAPIER.World;
-    private playerQuery; // Query for all players
-    private playerQueryEnter; // Query for new players
-    private playerQueryExit; // Query for players that left
+    // Use IWorld and definite assignment assertion (!)
+    private ecsWorld!: IWorld;
+    private rapierWorld!: RAPIER.World;
 
-    // Map Colyseus client ID to ECS entity ID
+    // Add types and definite assignment assertions (!)
+    private playerQuery!: Query;
+    private playerQueryEnter!: EnterQuery;
+    private playerQueryExit!: ExitQuery;
+
     private clientEntityMap: Map<string, number> = new Map();
-
-    // Map Rapier rigid body handle to ECS entity ID
     private rigidBodyEntityMap: Map<number, number> = new Map();
 
-    private readonly fixedTimeStep = 1 / 60; // 60 FPS physics simulation
-    private readonly speed = 5.0; // Movement speed factor
+    private readonly fixedTimeStep = 1 / 60;
+    private readonly speed = 5.0;
 
 
     async onCreate(_options: any) {
         console.log("[MyRoom] Room created!");
 
         // -- ECS Setup --
-        this.ecsWorld = {} as EcsWorld; // Create world in bitecs v1 style (object is fine)
+        // Initialize world as an empty object conforming to IWorld
+        this.ecsWorld = {};
         this.playerQuery = defineQuery([Position, PlayerInput, RapierRigidBodyHandle]);
         this.playerQueryEnter = enterQuery(this.playerQuery);
         this.playerQueryExit = exitQuery(this.playerQuery);
 
         // -- Physics Setup --
-        // No need to dynamically import Rapier when using compat package
         const gravity = { x: 0.0, y: -9.81, z: 0.0 };
         this.rapierWorld = new RAPIER.World(gravity);
 
-        // Create Ground
         const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25.0, 0.1, 25.0);
         this.rapierWorld.createCollider(groundColliderDesc);
-
 
         // -- Initial State --
         this.setState(new MyRoomState());
 
-        // -- Message Handlers --
+        // -- Message Handlers -- (Keep as is)
         this.onMessage("input", (client, message) => {
             const eid = this.clientEntityMap.get(client.sessionId);
             if (eid !== undefined && hasComponent(this.ecsWorld, PlayerInput, eid)) {
@@ -86,10 +95,10 @@ export class MyRoom extends Room<MyRoomState> {
             }
         });
 
-        // -- Game Loop --
+        // -- Game Loop -- (Keep as is)
         this.setSimulationInterval((deltaTime) => {
-            this.update(deltaTime / 1000); // Convert ms to seconds
-        }, this.fixedTimeStep * 1000); // Interval in milliseconds
+            this.update(deltaTime / 1000);
+        }, this.fixedTimeStep * 1000);
 
         console.log("[MyRoom] ECS and Rapier initialized.");
     }
@@ -98,47 +107,48 @@ export class MyRoom extends Room<MyRoomState> {
         console.log(`[MyRoom] Client ${client.sessionId} joined!`);
 
         // -- Create ECS Entity --
-        const eid = addComponent(this.ecsWorld, Position, 0); // Use 0 as placeholder, bitecs manages IDs
-        addComponent(this.ecsWorld, Velocity, eid); // Might not need velocity if Rapier handles it
+        const eid = addEntity(this.ecsWorld); // Use addEntity first
+        addComponent(this.ecsWorld, Position, eid); // Then add components to the eid
+        // addComponent(this.ecsWorld, Velocity, eid); // Velocity is implicitly handled by Rapier, maybe remove
         addComponent(this.ecsWorld, PlayerInput, eid);
         addComponent(this.ecsWorld, RapierRigidBodyHandle, eid);
 
-        // Initial position (spawn point slightly above ground)
-        Position.x[eid] = Math.random() * 10 - 5; // Random spawn X
+        // Initial position
+        Position.x[eid] = Math.random() * 10 - 5;
         Position.y[eid] = 1.0;
-        Position.z[eid] = Math.random() * 10 - 5; // Random spawn Z
+        Position.z[eid] = Math.random() * 10 - 5;
         PlayerInput.left[eid] = 0;
         PlayerInput.right[eid] = 0;
         PlayerInput.forward[eid] = 0;
         PlayerInput.backward[eid] = 0;
+        // RapierRigidBodyHandle will be set below
 
 
-        // -- Create Rapier Body --
+        // -- Create Rapier Body -- (Keep as is)
         const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
             .setTranslation(Position.x[eid], Position.y[eid], Position.z[eid])
-            .setLinvel(0, 0, 0) // Start with zero velocity
-            .setCcdEnabled(false); // Optional: Continuous Collision Detection
+            .setLinvel(0, 0, 0)
+            .setCcdEnabled(false);
         const rigidBody = this.rapierWorld.createRigidBody(rigidBodyDesc);
 
-        const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5) // 1x1x1 cube
-            .setRestitution(0.1) // Bounciness
+        const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5)
+            .setRestitution(0.1)
             .setFriction(0.5);
         this.rapierWorld.createCollider(colliderDesc, rigidBody);
 
         // -- Link ECS and Rapier --
         const rigidBodyHandle = rigidBody.handle;
+        // Set the handle value in the ECS component store
         RapierRigidBodyHandle.handle[eid] = rigidBodyHandle;
         this.rigidBodyEntityMap.set(rigidBodyHandle, eid);
 
         // -- Link Client and ECS --
         this.clientEntityMap.set(client.sessionId, eid);
 
-        // -- Add to Colyseus State --
-        // (This will be handled automatically by the enterQuery in the update loop)
-
         console.log(`[MyRoom] Created ECS entity ${eid} and Rapier body ${rigidBodyHandle} for client ${client.sessionId}`);
     }
 
+    // --- update function remains the same ---
     update(deltaTime: number) {
         // --- Handle Player Input ---
         const movingEntities = this.playerQuery(this.ecsWorld);
@@ -167,60 +177,57 @@ export class MyRoom extends Room<MyRoomState> {
                 moving = true;
             }
 
-            // Apply impulse only if there's input to avoid constant small forces fighting friction
             if (moving) {
-                // Apply impulse relative to current velocity - trying to reach target speed quickly
                 const currentVel = rigidBody.linvel();
                 const impulseScaled = {
-                    x: (impulse.x - currentVel.x) * 0.2, // Adjust multiplier for responsiveness
-                    y: 0, // Let gravity handle Y
+                    x: (impulse.x - currentVel.x) * 0.2,
+                    y: 0,
                     z: (impulse.z - currentVel.z) * 0.2,
                 };
                 rigidBody.applyImpulse(impulseScaled, true);
 
-                // Optional: Clamp velocity to prevent excessive speeds
-                // const clampedVel = { ...rigidBody.linvel() };
-                // const maxSpeed = 5;
-                // if (Math.abs(clampedVel.x) > maxSpeed) clampedVel.x = Math.sign(clampedVel.x) * maxSpeed;
-                // if (Math.abs(clampedVel.z) > maxSpeed) clampedVel.z = Math.sign(clampedVel.z) * maxSpeed;
-                // rigidBody.setLinvel(clampedVel, true);
-
-            } else {
-                 // If no input, maybe apply slight damping or let friction handle it
-                 // Rapier's friction should slow it down. Ensure sufficient friction on collider/ground.
             }
         }
 
         // --- Step Physics World ---
         this.rapierWorld.step();
 
-        // --- Sync ECS State from Rapier ---
-        for (const eid of movingEntities) {
+        // --- Sync ECS State from Rapier & Update Colyseus State ---
+        const allPlayers = this.playerQuery(this.ecsWorld); // Re-query in case entities changed during physics step? Maybe not needed.
+        for (const eid of allPlayers) { // Use allPlayers query result
             const rigidBodyHandle = RapierRigidBodyHandle.handle[eid];
             const rigidBody = this.rapierWorld.getRigidBody(rigidBodyHandle);
             if (!rigidBody) continue;
 
             const pos = rigidBody.translation();
+            // Update ECS (optional if only Colyseus needs it, but good practice)
             Position.x[eid] = pos.x;
             Position.y[eid] = pos.y;
             Position.z[eid] = pos.z;
 
-            // Update Colyseus state directly (more efficient for simple cases)
-            const playerState = this.state.players.get(this.findClientIdByEid(eid));
-            if (playerState) {
-                playerState.x = pos.x;
-                playerState.y = pos.y;
-                playerState.z = pos.z;
+            // Update Colyseus state directly
+            const clientId = this.findClientIdByEid(eid); // Find client ID associated with this entity
+            if(clientId) {
+                const playerState = this.state.players.get(clientId);
+                if (playerState) {
+                    playerState.x = pos.x;
+                    playerState.y = pos.y;
+                    playerState.z = pos.z;
+                }
+            } else {
+                // This might happen briefly if a player leaves during the update loop
+                // console.warn(`[MyRoom Update] No client ID found for eid ${eid} during state sync.`);
             }
         }
 
-        // --- Sync Colyseus State from ECS Queries ---
+        // --- Sync Colyseus Player Additions ---
         const entered = this.playerQueryEnter(this.ecsWorld);
         for (const eid of entered) {
             const clientId = this.findClientIdByEid(eid);
             if (clientId && !this.state.players.has(clientId)) {
                  console.log(`[Colyseus State] Adding player ${clientId} (eid: ${eid})`);
                  const playerState = new PlayerState();
+                 // Initialize from current ECS position which should be recently updated from Rapier
                  playerState.x = Position.x[eid];
                  playerState.y = Position.y[eid];
                  playerState.z = Position.z[eid];
@@ -228,75 +235,89 @@ export class MyRoom extends Room<MyRoomState> {
             }
         }
 
+         // --- Sync Colyseus Player Removals ---
         const exited = this.playerQueryExit(this.ecsWorld);
-        for (const eid of exited) {
-            // This query triggers *after* the component is removed, so we need the clientId from the map
-            const clientId = this.findClientIdByEid(eid); // Find it before removing from map
-             if (clientId && this.state.players.has(clientId)) {
-                console.log(`[Colyseus State] Removing player ${clientId} (eid: ${eid})`);
+        // Store client IDs before maps are cleaned up in onLeave
+        const exitedClientIds: string[] = [];
+        for(const eid of exited) {
+            const clientId = this.findClientIdByEid(eid);
+            if (clientId) {
+                exitedClientIds.push(clientId);
+            }
+        }
+        // Now process removals based on stored client IDs
+        for (const clientId of exitedClientIds) {
+             if (this.state.players.has(clientId)) {
+                console.log(`[Colyseus State] Removing player ${clientId}`);
                 this.state.players.delete(clientId);
             }
-            // Clean up maps for the exited entity
-            if (clientId) this.clientEntityMap.delete(clientId);
-            const rigidBodyHandle = RapierRigidBodyHandle.handle[eid]; // Get handle before component removal if possible, might need temporary storage
-             if(rigidBodyHandle) this.rigidBodyEntityMap.delete(rigidBodyHandle); // Clean up body map
         }
     }
 
 
-    onLeave(client: Client, _consented: boolean) {
+    // --- onLeave function remains mostly the same, ensure component removals are correct ---
+     onLeave(client: Client, _consented: boolean) {
         const eid = this.clientEntityMap.get(client.sessionId);
         console.log(`[MyRoom] Client ${client.sessionId} left (eid: ${eid}).`);
 
         if (eid !== undefined) {
             // -- Remove Rapier Body --
-            const rigidBodyHandle = RapierRigidBodyHandle.handle[eid];
+            // Retrieve handle *before* removing the ECS component
+             const rigidBodyHandle = hasComponent(this.ecsWorld, RapierRigidBodyHandle, eid)
+                ? RapierRigidBodyHandle.handle[eid]
+                : undefined;
+
             if (rigidBodyHandle !== undefined) {
                  const rigidBody = this.rapierWorld.getRigidBody(rigidBodyHandle);
                  if (rigidBody) {
-                      // Need to remove associated colliders first
-                      for (let i = 0; i < rigidBody.numColliders(); i++) {
-                           const colliderHandle = rigidBody.collider(i);
-                           const collider = this.rapierWorld.getCollider(colliderHandle);
+                      // Remove colliders BEFORE removing the body
+                      const numColliders = rigidBody.numColliders();
+                      const collidersToRemove = [];
+                      for (let i = 0; i < numColliders; i++) {
+                          collidersToRemove.push(rigidBody.collider(i));
+                      }
+                      for(const colliderHandle of collidersToRemove) {
+                          const collider = this.rapierWorld.getCollider(colliderHandle);
                            if (collider) {
-                                this.rapierWorld.removeCollider(collider, false); // false = don't wake interacting bodies yet
+                                this.rapierWorld.removeCollider(collider, false);
                            }
                       }
+
                       this.rapierWorld.removeRigidBody(rigidBody);
                       console.log(`[MyRoom] Removed Rapier body ${rigidBodyHandle}`);
                  } else {
                       console.warn(`[MyRoom] Could not find Rapier body ${rigidBodyHandle} to remove for eid ${eid}`);
                  }
-                 this.rigidBodyEntityMap.delete(rigidBodyHandle); // Clean up map
+                 this.rigidBodyEntityMap.delete(rigidBodyHandle);
             } else {
                  console.warn(`[MyRoom] No Rapier handle found for eid ${eid} on leave.`);
             }
 
-            // -- Remove ECS Entity --
-            // Removing components triggers exit queries in the *next* update loop
+            // -- Remove ECS Entity Components --
+            // This marks the entity for the exitQuery in the next `update`
             if (hasComponent(this.ecsWorld, Position, eid)) removeComponent(this.ecsWorld, Position, eid);
-            if (hasComponent(this.ecsWorld, Velocity, eid)) removeComponent(this.ecsWorld, Velocity, eid);
+            // if (hasComponent(this.ecsWorld, Velocity, eid)) removeComponent(this.ecsWorld, Velocity, eid); // Remove if component exists
             if (hasComponent(this.ecsWorld, PlayerInput, eid)) removeComponent(this.ecsWorld, PlayerInput, eid);
             if (hasComponent(this.ecsWorld, RapierRigidBodyHandle, eid)) removeComponent(this.ecsWorld, RapierRigidBodyHandle, eid);
-            // Note: bitecs doesn't have explicit entity deletion in v1; removing all components effectively does it.
 
              // -- Clean up client mapping immediately --
              this.clientEntityMap.delete(client.sessionId);
 
-            // Colyseus state removal is handled by the exit query in the update loop
-             console.log(`[MyRoom] Marked ECS entity ${eid} for removal.`);
+            // Colyseus state removal is now handled by the exit query in the *next* update loop
+             console.log(`[MyRoom] Marked ECS entity ${eid} components for removal.`);
 
         } else {
              console.warn(`[MyRoom] Client ${client.sessionId} left, but no matching entity found.`);
         }
     }
 
+
+    // --- onDispose function remains the same ---
     onDispose() {
         console.log("[MyRoom] Room disposed.");
-        // Optional: Clean up Rapier world? Rapier doesn't have an explicit dispose AFAIK.
     }
 
-    // Helper to find clientId from eid
+    // --- findClientIdByEid function remains the same ---
     private findClientIdByEid(eid: number): string | undefined {
         for (const [clientId, entityId] of this.clientEntityMap.entries()) {
             if (entityId === eid) {
