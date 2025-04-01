@@ -15,6 +15,7 @@
     "@babylonjs/core": "^8.0.1",
     "@babylonjs/materials": "^8.0.1",
     "@types/express": "^5.0.1",
+    "bitecs": "^0.3.40",
     "colyseus.js": "^0.16.15",
     "express": "^4.21.2"
   }
