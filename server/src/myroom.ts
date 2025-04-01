@@ -13,6 +13,7 @@ import {
     Types,
     addEntity,
     Query, // Use this type for all query variables
+    createWorld // <-- Import createWorld
 } from "bitecs";
 import RAPIER from "@dimforge/rapier3d-compat";
 
@@ -61,20 +62,26 @@ export class MyRoom extends Room<MyRoomState> {
 
 
     async onCreate(_options: any) {
-        // Wrap initialization in try-catch for better error handling
         try {
             console.log("[MyRoom] Room created! Initializing...");
 
+            // --- Initialize ECS World & Queries FIRST using createWorld ---
+            this.ecsWorld = createWorld(); // Use createWorld()
+            const playerComponents = [Position, PlayerInput, RapierRigidBodyHandle];
+            // Define queries (these mutate this.ecsWorld internally)
+            this.playerQuery = defineQuery(playerComponents);
+            // Define ENTER query based on a *new* query definition using the same components
+            this.playerQueryEnter = enterQuery(defineQuery(playerComponents)); // Use a fresh definition
+            // Define EXIT query based on a *new* query definition using the same components
+            this.playerQueryExit = exitQuery(defineQuery(playerComponents));  // Use a fresh definition
+            console.log("[MyRoom] ECS World & Queries Initialized.");
+            // --- End ECS Init ---
+
+
             // 1. Initialize Rapier (needs to be awaited)
+            // Now 'await' happens AFTER bitecs world is setup
             await RAPIER.init();
             console.log("[MyRoom] Rapier WASM Initialized.");
-
-            // 2. Initialize ECS World and Queries
-            this.ecsWorld = {}; // Simple object is fine for bitecs v1 world
-            this.playerQuery = defineQuery([Position, PlayerInput, RapierRigidBodyHandle]);
-            this.playerQueryEnter = enterQuery(this.playerQuery);
-            this.playerQueryExit = exitQuery(this.playerQuery);
-            console.log("[MyRoom] ECS World & Queries Initialized.");
 
             // 3. Initialize Rapier World
             const gravity = { x: 0.0, y: -9.81, z: 0.0 };
@@ -105,6 +112,11 @@ export class MyRoom extends Room<MyRoomState> {
             // 7. Start the Simulation Loop (LAST STEP in setup)
             this.setSimulationInterval((deltaTime) => {
                  try {
+                     // Add a check here just in case update runs before world is ready
+                     if (!this.ecsWorld) {
+                         console.warn("[MyRoom Update] Skipping update, ecsWorld is not initialized yet.");
+                         return;
+                     }
                      this.update(deltaTime / 1000); // Convert ms to seconds
                  } catch (e) {
                      console.error("[MyRoom Update Loop Error]", e);
@@ -124,10 +136,16 @@ export class MyRoom extends Room<MyRoomState> {
 
     onJoin(client: Client, _options: any) {
         try { // Add try-catch for safety during join
+            // Add a guard check at the beginning of onJoin as well
+            if (!this.ecsWorld) {
+                 console.error(`!!! ERROR during onJoin for client ${client.sessionId}: ecsWorld is not initialized!`);
+                 client.leave(); // Prevent further processing
+                 return;
+            }
             console.log(`[MyRoom] Client ${client.sessionId} joined!`);
 
             // Create ECS Entity
-            const eid = addEntity(this.ecsWorld);
+            const eid = addEntity(this.ecsWorld); // Should now work if createWorld() succeeded
             addComponent(this.ecsWorld, Position, eid);
             addComponent(this.ecsWorld, PlayerInput, eid);
             addComponent(this.ecsWorld, RapierRigidBodyHandle, eid);
@@ -193,6 +211,7 @@ export class MyRoom extends Room<MyRoomState> {
                 if (moving) {
                     const currentVel = rigidBody.linvel();
                     // Apply impulse to counteract current velocity and reach target speed
+                    // Tweak the multiplier (0.2) to control acceleration/responsiveness
                     const impulseScaled = { x: (impulse.x - currentVel.x) * 0.2, y: 0, z: (impulse.z - currentVel.z) * 0.2 };
                     rigidBody.applyImpulse(impulseScaled, true); // true = wake body if sleeping
                 }
