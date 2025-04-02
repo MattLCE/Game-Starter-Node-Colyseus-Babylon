@@ -1,37 +1,42 @@
 // server/src/myroom.test.ts
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { MyRoom, PlayerState, MyRoomState } from "./myroom"; // No RapierRigidBodyHandle here
+import { MyRoom, PlayerState, MyRoomState, InputPayload } from "./myroom"; // Import InputPayload too
 import { Client } from "@colyseus/core";
 import RAPIER from "@dimforge/rapier3d-compat";
-import { addEntity, hasComponent, Query } from "bitecs";
-// Import only existing components
-import { Position, PlayerInput, Velocity } from "./myroom"; // No RapierRigidBodyHandle here
+import {
+  // addEntity, // unused
+  hasComponent,
+  // Query, // Query was unused
+} from "bitecs";
+// Import only existing components used in tests
+import { Position, PlayerInput } from "./myroom";
 
-// --- Mocks remain the same ---
+// --- Mocks ---
+// (Mock setup remains the same as before)
 vi.mock("@dimforge/rapier3d-compat", async (importOriginal) => {
   const actual = await importOriginal<typeof RAPIER>();
   const mockRigidBody = {
-    handle: Math.random() * 1000, // Keep mock handle for internal mock logic
-    numColliders: vi.fn(() => 0),
-    collider: vi.fn(() => 0),
+    handle: Math.random() * 1000,
+    numColliders: vi.fn(() => 1),
+    collider: vi.fn(() => 12345), // Return a mock collider handle
     translation: vi.fn(() => ({ x: 0, y: 0, z: 0 })),
     linvel: vi.fn(() => ({ x: 0, y: 0, z: 0 })),
     applyImpulse: vi.fn(),
     setLinvel: vi.fn(),
   };
+  const mockCollider = { handle: 12345 }; // Mock the collider object
   const mockWorld = {
     createCollider: vi.fn(),
     createRigidBody: vi.fn(() => mockRigidBody),
-    // Mock getRigidBody (though we don't use it with handles anymore)
-    getRigidBody: vi.fn((handle) => (handle === 0 ? mockRigidBody : null)), // Simple mock
-    getCollider: vi.fn(() => ({ handle: 12345 })),
+    getRigidBody: vi.fn((_handle) => mockRigidBody),
+    getCollider: vi.fn((handle) => (handle === 12345 ? mockCollider : null)),
     removeCollider: vi.fn(),
     removeRigidBody: vi.fn(),
     step: vi.fn(),
   };
-
+  // Return structure matching how RAPIER might be imported/used
   return {
-    ...actual,
+    ...actual, // Spread actual to keep non-mocked parts if any
     World: vi.fn().mockImplementation(() => mockWorld),
     ColliderDesc: {
       cuboid: vi.fn(() => ({
@@ -46,27 +51,53 @@ vi.mock("@dimforge/rapier3d-compat", async (importOriginal) => {
         setCcdEnabled: vi.fn().mockReturnThis(),
       })),
     },
+    default: {
+      // Handle default export if used like RAPIER.World
+      World: vi.fn().mockImplementation(() => mockWorld),
+      ColliderDesc: {
+        cuboid: vi.fn(() => ({
+          setRestitution: vi.fn().mockReturnThis(),
+          setFriction: vi.fn().mockReturnThis(),
+        })),
+      },
+      RigidBodyDesc: {
+        dynamic: vi.fn(() => ({
+          setTranslation: vi.fn().mockReturnThis(),
+          setLinvel: vi.fn().mockReturnThis(),
+          setCcdEnabled: vi.fn().mockReturnThis(),
+        })),
+      },
+    },
   };
 });
 
 describe("MyRoom Tests", () => {
   let room: MyRoom;
+  let mockClient: Client;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+
+    mockClient = {
+      sessionId: "client1",
+      send: vi.fn(),
+      leave: vi.fn(),
+    } as unknown as Client;
+
     room = new MyRoom();
-    // Mock internal properties/methods needed for tests
+
+    // Mock internal state/methods using 'as any' carefully
     room.setState = vi.fn((state) => {
       (room as any).state = state;
     });
-    room.setSimulationInterval = vi.fn();
+    room.setSimulationInterval = vi.fn((_callback, _interval) => {});
     room.clock = { deltaTime: 16.6, elapsedTime: 0, tick: vi.fn() } as any;
-    (room as any).eidToRapierBodyMap = new Map(); // Initialize the new map for tests
-    (room as any).clientEntityMap = new Map(); // Initialize map
+    (room as any).clientEntityMap = new Map<string, number>();
+    (room as any).eidToRapierBodyMap = new Map<number, RAPIER.RigidBody>();
 
-    // Need to await onCreate to initialize rapier/ecs world within the room
-    await room.onCreate({});
-    // Ensure state is set if onCreate didn't mock it completely
+    await room.onCreate({}); // Call onCreate
+
+    // Ensure state is initialized if mock didn't cover it
     if (!(room as any).state) {
       room.setState(new MyRoomState());
     }
@@ -76,106 +107,96 @@ describe("MyRoom Tests", () => {
     expect(room).toBeDefined();
     expect((room as any).rapierWorld).toBeDefined();
     expect((room as any).ecsWorld).toBeDefined();
-    expect((room as any).eidToRapierBodyMap).toBeDefined(); // Check new map
+    expect((room as any).eidToRapierBodyMap).toBeDefined();
+    expect((room as any).clientEntityMap).toBeDefined();
   });
 
-  it("should add a player state onJoin and process in update", () => {
-    const mockClient = {
-      sessionId: "client1",
-      send: vi.fn(),
-      leave: vi.fn(),
-    } as unknown as Client;
+  it("should add a player state onJoin and sync state in update", () => {
     room.onJoin(mockClient, {});
-    const ecsWorld = (room as any).ecsWorld;
+    // const ecsWorld = (room as any).ecsWorld;
     const clientEntityMap = (room as any).clientEntityMap;
-    const eid = clientEntityMap.get("client1");
+    const eid = clientEntityMap.get(mockClient.sessionId);
 
+    // Use type guards or checks instead of ! assertion where possible
     expect(eid).toBeDefined();
-    // Check for components that *should* exist
+    if (eid === undefined)
+      throw new Error("eid should be defined after onJoin"); // Fail test explicitly if undefined
+
+    expect(eid).toBeTypeOf("number"); // Check type
+
     expect(hasComponent(ecsWorld, Position, eid)).toBe(true);
     expect(hasComponent(ecsWorld, PlayerInput, eid)).toBe(true);
-    // Check that the map has the body
     expect((room as any).eidToRapierBodyMap.has(eid)).toBe(true);
 
-    (room as any).update(16.6 / 1000); // Run one update cycle
+    (room as any).update(1 / 60); // Run update
 
-    // Check Colyseus state
     expect(room.state.players.size).toBe(1);
-    const playerState = room.state.players.get("client1");
+    const playerState = room.state.players.get(mockClient.sessionId);
     expect(playerState).toBeInstanceOf(PlayerState);
-    // Position check remains valid
-    expect(playerState?.x).toBe(Position.x[eid!]);
-    expect(playerState?.y).toBe(Position.y[eid!]);
-    expect(playerState?.z).toBe(Position.z[eid!]);
+
+    // Compare against ECS state after update
+    expect(playerState?.x).toBe(Position.x[eid]);
+    expect(playerState?.y).toBe(Position.y[eid]);
+    expect(playerState?.z).toBe(Position.z[eid]);
   });
 
-  it("should remove player state onLeave and process in update", () => {
-    const mockClient = {
-      sessionId: "client1",
-      send: vi.fn(),
-      leave: vi.fn(),
-    } as unknown as Client;
+  it("should remove player state onLeave and call Rapier removal", () => {
     room.onJoin(mockClient, {});
-    (room as any).update(16.6 / 1000); // Add state
+    (room as any).update(1 / 60);
     expect(room.state.players.size).toBe(1);
 
     const clientEntityMap = (room as any).clientEntityMap;
-    const eid = clientEntityMap.get("client1");
-    expect(eid).toBeDefined();
-    expect((room as any).eidToRapierBodyMap.has(eid)).toBe(true); // Check map before leave
+    const eid = clientEntityMap.get(mockClient.sessionId);
+    expect(eid).toBeDefined(); // Check defined first
+    if (eid === undefined)
+      throw new Error("eid should be defined before onLeave");
+
+    expect((room as any).eidToRapierBodyMap.has(eid)).toBe(true);
 
     room.onLeave(mockClient, false); // Trigger leave
 
-    // Check that maps are cleared
-    expect((room as any).clientEntityMap.has("client1")).toBe(false);
-    expect((room as any).eidToRapierBodyMap.has(eid)).toBe(false); // Check map after leave
+    expect((room as any).clientEntityMap.has(mockClient.sessionId)).toBe(false);
+    expect((room as any).eidToRapierBodyMap.has(eid)).toBe(false);
 
-    // Check that components are marked for removal (won't be gone until *after* next update)
-    const ecsWorld = (room as any).ecsWorld;
-    expect(hasComponent(ecsWorld, Position, eid)).toBe(false); // bitecs removes immediately in v1
-    expect(hasComponent(ecsWorld, PlayerInput, eid)).toBe(false); // bitecs removes immediately in v1
+    // const ecsWorld = (room as any).ecsWorld;
+    // bitecs removes components immediately
+    expect(hasComponent(ecsWorld, Position, eid)).toBe(false);
+    expect(hasComponent(ecsWorld, PlayerInput, eid)).toBe(false);
 
-    // Check that Rapier removal was called
-    const rapierWorldMock = (room as any).rapierWorld;
-    console.log(
-      "Is removeCollider a mock?",
-      vi.isMockFunction(rapierWorldMock.removeCollider)
-    );
-    expect(rapierWorldMock.removeCollider).toHaveBeenCalled();
-    expect(rapierWorldMock.removeRigidBody).toHaveBeenCalled();
+    const rapierWorldMockInstance = (room as any).rapierWorld;
+    // Check that the mocked functions were called
+    expect(rapierWorldMockInstance.removeCollider).toHaveBeenCalled();
+    expect(rapierWorldMockInstance.removeRigidBody).toHaveBeenCalled();
 
-    // Run update to process exitQuery for Colyseus state removal
-    (room as any).update(16.6 / 1000);
-    expect(room.state.players.has("client1")).toBe(false); // Colyseus state should be gone now
+    (room as any).update(1 / 60); // Run update to process exit query
+    expect(room.state.players.has(mockClient.sessionId)).toBe(false);
   });
 
   it("should update player input component on message", () => {
-    const mockClient = {
-      sessionId: "client1",
-      send: vi.fn(),
-      leave: vi.fn(),
-    } as unknown as Client;
     room.onJoin(mockClient, {});
-    (room as any).update(16.6 / 1000);
-    const eid = (room as any).clientEntityMap.get("client1");
-    expect(eid).toBeDefined();
-    const ecsWorld = (room as any).ecsWorld;
-    expect(PlayerInput.forward[eid!]).toBe(0);
+    (room as any).update(1 / 60);
+    const eid = (room as any).clientEntityMap.get(mockClient.sessionId);
+    expect(eid).toBeDefined(); // Check defined
+    if (eid === undefined)
+      throw new Error("eid should be defined before onMessage");
 
-    // Message handling remains the same
-    const messagePayload: {
-      forward: boolean;
-      left: boolean;
-      right: boolean;
-      backward: boolean;
-    } = {
+    // const ecsWorld = (room as any).ecsWorld;
+
+    expect(PlayerInput.forward[eid]).toBe(0); // Check initial value
+
+    // Use the imported InputPayload type implicitly
+    const messagePayload: InputPayload = {
       forward: true,
       left: false,
       right: false,
       backward: false,
     };
-    room.onMessage("input", mockClient as any, messagePayload as any);
-    expect(PlayerInput.forward[eid!]).toBe(1);
-    expect(PlayerInput.left[eid!]).toBe(0);
+    room.onMessage("input", mockClient, messagePayload);
+
+    // Check updated values
+    expect(PlayerInput.forward[eid]).toBe(1); // Failing assertion is here
+    expect(PlayerInput.left[eid]).toBe(0);
+    expect(PlayerInput.right[eid]).toBe(0);
+    expect(PlayerInput.backward[eid]).toBe(0);
   });
 });

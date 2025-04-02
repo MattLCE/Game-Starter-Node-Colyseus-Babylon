@@ -1,87 +1,88 @@
 // eslint.config.mjs
 import eslint from "@eslint/js";
-import tseslint from 'typescript-eslint'; // <--- Import the main typescript-eslint object
+import tseslint from 'typescript-eslint';
 import eslintPluginPrettierRecommended from "eslint-plugin-prettier/recommended";
 import globals from "globals";
-// import path from "path"; // You might need these if using explicit project paths
-// import { fileURLToPath } from "url";
-
-// const __filename = fileURLToPath(import.meta.url);
-// const __dirname = path.dirname(__filename);
 
 export default [
   // 1. Ignore patterns first
   {
     ignores: [
-      "node_modules/",
-      "dist/", // Ignore root dist
-      "client/dist/", // Ignore client dist
-      "server/dist/", // Ignore server dist
-      "**/*.js", // Keep ignoring JS if you don't use it
-      "**/*.d.ts",
-      ".replit",
-      "replit.nix",
-      // Add any other specific files/folders to ignore
+      "node_modules/", "dist/", "client/dist/", "server/dist/",
+      "**/*.js", "**/*.d.ts", ".replit", "replit.nix",
     ],
   },
 
-  // 2. Base ESLint recommended rules
+  // 2. Base ESLint recommended rules (applied globally)
   eslint.configs.recommended,
 
-  // 3. TypeScript configuration (applied globally to TS files)
+  // 3. Base TypeScript configuration (Parser, Plugin, Project Setup)
+  // This sets up the environment for subsequent TS rules.
   {
-    // Specify files this config applies to (optional, but good practice)
-    // files: ["**/*.ts"], // You can uncomment this if you want to be explicit
-
-    plugins: {
-      // Use the imported 'tseslint' object for the plugin
-      '@typescript-eslint': tseslint.plugin,
-    },
+    // Apply broadly to allow parser/plugin to work on all TS files
+    files: ["**/*.ts", "**/*.mts", "**/*.cts"],
+    plugins: { '@typescript-eslint': tseslint.plugin },
     languageOptions: {
-      // Use the imported 'tseslint' object for the parser
       parser: tseslint.parser,
       parserOptions: {
-        // Enable type-aware linting by pointing to your tsconfig files
-        project: true, // Let ESLint find tsconfigs automatically
-        // OR explicitly list them relative to eslint.config.mjs if 'true' doesn't work:
-        // project: [
-        //   './server/tsconfig.json',
-        //   // Add './client/tsconfig.json' here if you create one for the client
-        // ],
-        // tsconfigRootDir: __dirname, // Often needed with explicit project paths
+        project: [ // Still need project reference for type-aware rules
+          './tsconfig.json',
+          './client/tsconfig.json',
+          './server/tsconfig.json'
+        ],
+        // Might be needed if tsconfigs include non-TS files
+        allowExtraFileExtensions: true,
       },
-      globals: {
-        ...globals.browser, // For client-side code if linted
-        ...globals.node,    // For server-side code
-        __dirname: "readonly", // For CommonJS modules (like your server output)
-        // Add any other custom globals if needed
-      },
+      globals: { ...globals.browser, ...globals.node, __dirname: "readonly" },
     },
-    linterOptions: {
-      reportUnusedDisableDirectives: "warn",
-    },
+    linterOptions: { reportUnusedDisableDirectives: "warn" },
     rules: {
-      // You can add TS-specific rule overrides here if needed later
-      // Example: '@typescript-eslint/no-unused-vars': 'warn',
+      // Rule to ignore unused args starting with underscore
+      // Applied here so it affects all TS files unless overridden
+      '@typescript-eslint/no-unused-vars': ['warn', { 'argsIgnorePattern': '^_' }],
     }
   },
 
-  // 4. TypeScript Recommended Type-Checked Rules (Uses settings from section 3)
-  // These rules require type information.
+  // 4. Apply recommended Type-Checked rules directly into the main array
+  // These rules generally apply only to files covered by the 'project' setting above.
+  // Let's see if they scope correctly this way.
   ...tseslint.configs.recommendedTypeChecked,
-  // Or use the stricter version:
-  // ...tseslint.configs.strictTypeChecked,
 
-  // 5. Prettier recommended rules (DISABLES CONFLICTING ESLint formatting rules - place last)
-  eslintPluginPrettierRecommended,
-
-  // 6. Your custom global rule overrides (Optional)
+  // 5. Configuration Overrides for Test Files
+  // This block MUST come *after* spreading recommendedTypeChecked if it overrides those rules.
   {
+    files: ["**/*.test.ts", "**/*.spec.ts"],
     rules: {
-      // Add any final global overrides here
-      // Example: Disabling a specific rule globally
-      // 'no-console': 'warn',
-       '@typescript-eslint/no-explicit-any': 'off', // Example: allow 'any' for now
-    },
+      // Disable rules often problematic in tests
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+      // Disable promise checks in tests
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+    }
   },
+
+  // 6. Configuration Overrides for Root Config Files
+  // This block MUST come *after* spreading recommendedTypeChecked.
+  {
+     files: ["./vite.config.ts", "./vitest.config.ts", "./eslint.config.mjs"],
+     rules: {
+       // Disable type-aware rules for configs
+       "@typescript-eslint/no-unsafe-assignment": "off",
+       "@typescript-eslint/no-unsafe-call": "off",
+       "@typescript-eslint/no-unsafe-member-access": "off",
+       "@typescript-eslint/no-unsafe-argument": "off",
+       // Disable promise checks for configs
+       '@typescript-eslint/no-misused-promises': 'off',
+       '@typescript-eslint/no-floating-promises': 'off',
+     }
+  },
+
+  // 7. Prettier recommended rules (Place Last)
+  // This plugin disables ESLint formatting rules that conflict with Prettier.
+  eslintPluginPrettierRecommended,
 ];

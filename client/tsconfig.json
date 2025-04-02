@@ -1,0 +1,25 @@
+// /workspace/client/tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ESNext", // Target modern browsers
+    "module": "ESNext", // Use ES modules
+    "moduleResolution": "bundler", // Recommended for Vite/modern bundlers
+    "lib": ["DOM", "DOM.Iterable", "ESNext"], // Include browser libs
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true, // Vite requires this
+    "strict": true,
+    "noEmit": true, // Vite handles emitting, TS only type checks
+    "resolveJsonModule": true,
+    "useDefineForClassFields": true, // Modern standard
+    "allowJs": false
+
+    /* If you use path aliases in Vite config, mirror them here */
+    // "baseUrl": ".",
+    // "paths": {
+    //   "@/*": ["src/*"]
+    // }
+  },
+  "include": ["src/**/*.ts"], // Include client source files
+  "exclude": ["node_modules", "dist"]
+}

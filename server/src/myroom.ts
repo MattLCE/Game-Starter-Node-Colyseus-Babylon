@@ -20,7 +20,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 // -- ECS Components --
 export const Vector3Schema = { x: Types.f32, y: Types.f32, z: Types.f32 };
 export const Position = defineComponent(Vector3Schema);
-export const Velocity = defineComponent(Vector3Schema); // Can be kept if needed for non-physics velocity
+export const Velocity = defineComponent(Vector3Schema); // Keep if needed later
 export const PlayerInput = defineComponent({
   left: Types.ui8,
   right: Types.ui8,
@@ -39,8 +39,18 @@ export class MyRoomState extends Schema {
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
 }
 
+// -- Interfaces --
+// Define the expected structure of the input message payload
+interface InputPayload {
+  left: boolean;
+  right: boolean;
+  forward: boolean;
+  backward: boolean;
+}
+
 // -- Room Logic --
 export class MyRoom extends Room<MyRoomState> {
+  // Make properties definite assignment assertion (!) as they are initialized in onCreate
   private ecsWorld!: IWorld;
   private rapierWorld!: RAPIER.World;
   private playerQuery!: Query;
@@ -55,15 +65,17 @@ export class MyRoom extends Room<MyRoomState> {
   private readonly speed = 5.0;
 
   async onCreate(_options: any) {
+    // Prefix unused 'options' with _
     try {
       console.log("[MyRoom] Room created! Initializing...");
       this.ecsWorld = createWorld();
       const playerComponents = [Position, PlayerInput];
       this.playerQuery = defineQuery(playerComponents);
-      this.playerQueryEnter = enterQuery(defineQuery(playerComponents));
-      this.playerQueryExit = exitQuery(defineQuery(playerComponents));
+      this.playerQueryEnter = enterQuery(defineQuery(playerComponents)); // Use the defined query
+      this.playerQueryExit = exitQuery(defineQuery(playerComponents)); // Use the defined query
       console.log("[MyRoom] ECS World & Queries Initialized.");
 
+      // Ensure RAPIER is initialized before use
       await RAPIER.init();
       console.log("[MyRoom] Rapier WASM Initialized.");
 
@@ -78,43 +90,35 @@ export class MyRoom extends Room<MyRoomState> {
       this.setState(new MyRoomState());
       console.log("[MyRoom] Initial Colyseus State Set.");
 
-      this.onMessage(
-        "input",
-        (
-          client,
-          message: {
-            left: boolean;
-            right: boolean;
-            forward: boolean;
-            backward: boolean;
-          }
-        ) => {
-          const eid = this.clientEntityMap.get(client.sessionId);
-          if (
-            eid !== undefined &&
-            hasComponent(this.ecsWorld, PlayerInput, eid)
-          ) {
-            PlayerInput.left[eid] = message.left ? 1 : 0;
-            PlayerInput.right[eid] = message.right ? 1 : 0;
-            PlayerInput.forward[eid] = message.forward ? 1 : 0;
-            PlayerInput.backward[eid] = message.backward ? 1 : 0;
-          }
+      // Use the specific InputPayload interface for the message type
+      this.onMessage("input", (client, message: InputPayload) => {
+        const eid = this.clientEntityMap.get(client.sessionId);
+        if (
+          eid !== undefined &&
+          hasComponent(this.ecsWorld, PlayerInput, eid)
+        ) {
+          PlayerInput.left[eid] = message.left ? 1 : 0;
+          PlayerInput.right[eid] = message.right ? 1 : 0;
+          PlayerInput.forward[eid] = message.forward ? 1 : 0;
+          PlayerInput.backward[eid] = message.backward ? 1 : 0;
         }
-      );
+      });
       console.log("[MyRoom] Message Handlers Set.");
 
-      this.setSimulationInterval((deltaTime) => {
+      this.setSimulationInterval((_deltaTime) => {
         try {
-          if (!this.ecsWorld) {
-            // Keep this warning for safety
+          // Added null check for safety, though definite assignment assertion helps
+          if (!this.ecsWorld || !this.rapierWorld) {
             console.warn(
-              "[MyRoom Update] Skipping update, ecsWorld is not initialized yet."
+              "[MyRoom Update] Skipping update, world is not initialized yet."
             );
             return;
           }
-          this.update(deltaTime / 1000);
+          // Pass deltaTime from interval to the update function
+          this.update(_deltaTime / 1000);
         } catch (e) {
           console.error("[MyRoom Update Loop Error]", e);
+          // Consider more robust error handling, maybe try to recover?
           this.clock.clear();
           this.disconnect().catch((err) =>
             console.error(
@@ -127,6 +131,7 @@ export class MyRoom extends Room<MyRoomState> {
       console.log("[MyRoom] Simulation Loop Started. Initialization Complete.");
     } catch (initError) {
       console.error("!!! CRITICAL ERROR DURING onCreate !!!", initError);
+      // Attempt to disconnect if initialization fails critically
       this.disconnect().catch((e) =>
         console.error("Error disconnecting room after onCreate failure:", e)
       );
@@ -134,10 +139,12 @@ export class MyRoom extends Room<MyRoomState> {
   }
 
   onJoin(client: Client, _options: any) {
+    // Prefix unused 'options' with _
     try {
-      if (!this.ecsWorld) {
+      // Added null check for safety
+      if (!this.ecsWorld || !this.rapierWorld) {
         console.error(
-          `!!! ERROR during onJoin for client ${client.sessionId}: ecsWorld is not initialized!`
+          `!!! ERROR during onJoin for client ${client.sessionId}: World not initialized!`
         );
         client.leave();
         return;
@@ -148,6 +155,7 @@ export class MyRoom extends Room<MyRoomState> {
       addComponent(this.ecsWorld, Position, eid);
       addComponent(this.ecsWorld, PlayerInput, eid);
 
+      // Initialize position and input
       Position.x[eid] = Math.random() * 10 - 5;
       Position.y[eid] = 1.0;
       Position.z[eid] = Math.random() * 10 - 5;
@@ -159,17 +167,19 @@ export class MyRoom extends Room<MyRoomState> {
       const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(Position.x[eid], Position.y[eid], Position.z[eid])
         .setLinvel(0, 0, 0)
-        .setCcdEnabled(false);
+        .setCcdEnabled(false); // CCD might be overkill unless objects are very fast
       const rigidBody = this.rapierWorld.createRigidBody(rigidBodyDesc);
-      const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5)
-        .setRestitution(0.1)
-        .setFriction(0.5);
-      this.rapierWorld.createCollider(colliderDesc, rigidBody);
 
+      // Define collider shape and properties
+      const colliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5) // Example size
+        .setRestitution(0.1) // Low bounciness
+        .setFriction(0.5); // Some friction
+      this.rapierWorld.createCollider(colliderDesc, rigidBody); // Attach collider to body
+
+      // Store mappings
       this.eidToRapierBodyMap.set(eid, rigidBody);
       this.clientEntityMap.set(client.sessionId, eid);
 
-      // Removed Debug log about handle
       console.log(
         `[MyRoom] Created ECS entity ${eid} and associated Rapier body object for client ${client.sessionId}`
       );
@@ -189,7 +199,10 @@ export class MyRoom extends Room<MyRoomState> {
     }
   }
 
-  update(deltaTime: number) {
+  // Use deltaTime if needed for frame-rate independent logic, otherwise prefix with _
+  update(_deltaTime: number): void {
+    // Explicitly void return type
+    // Early exit if worlds/state aren't ready
     if (
       !this.state ||
       !this.ecsWorld ||
@@ -204,42 +217,57 @@ export class MyRoom extends Room<MyRoomState> {
       const movingEntities = this.playerQuery(this.ecsWorld);
       for (const eid of movingEntities) {
         const rigidBody = this.eidToRapierBodyMap.get(eid);
+        // Skip if physics body doesn't exist for this entity
         if (!rigidBody) {
-          // Keep this infrequent warning potentially
-          // console.warn(`[MyRoom Update] No Rapier body found in map for eid ${eid}`);
+          // console.warn(`[MyRoom Update] No Rapier body found for eid ${eid}`);
           continue;
         }
         const impulse = { x: 0, y: 0, z: 0 };
         let moving = false;
+        // Calculate intended direction based on input
         if (PlayerInput.forward[eid]) {
-          impulse.z += this.speed;
+          impulse.z += 1;
           moving = true;
         }
         if (PlayerInput.backward[eid]) {
-          impulse.z -= this.speed;
+          impulse.z -= 1;
           moving = true;
         }
         if (PlayerInput.left[eid]) {
-          impulse.x -= this.speed;
+          impulse.x -= 1;
           moving = true;
         }
         if (PlayerInput.right[eid]) {
-          impulse.x += this.speed;
+          impulse.x += 1;
           moving = true;
         }
+
         if (moving) {
+          // Normalize diagonal movement
+          const magnitude = Math.sqrt(
+            impulse.x * impulse.x + impulse.z * impulse.z
+          );
+          if (magnitude > 0) {
+            impulse.x = (impulse.x / magnitude) * this.speed;
+            impulse.z = (impulse.z / magnitude) * this.speed;
+          }
+
+          // Apply force/impulse (adjust multipliers for desired feel)
+          // Using impulse here for simplicity, could use addForce for smoother acceleration
           const currentVel = rigidBody.linvel();
-          const impulseScaled = {
+          const impulseDiff = {
             x: (impulse.x - currentVel.x) * 0.2,
             y: 0,
             z: (impulse.z - currentVel.z) * 0.2,
           };
-          rigidBody.applyImpulse(impulseScaled, true);
+          rigidBody.applyImpulse(impulseDiff, true);
         }
+        // Optional: Add damping if objects don't slow down enough naturally
+        // else { rigidBody.setLinvel({ x: currentVel.x * 0.95, y: currentVel.y, z: currentVel.z * 0.95 }, true); }
       }
     } catch (e) {
       console.error("[MyRoom Update] Error during input processing:", e);
-      return;
+      return; // Stop update on error
     }
 
     // --- Step Physics Simulation ---
@@ -247,50 +275,55 @@ export class MyRoom extends Room<MyRoomState> {
       this.rapierWorld.step();
     } catch (e) {
       console.error("[MyRoom Update] Error during Rapier step:", e);
-      return;
+      return; // Stop update on error
     }
 
     // --- Sync State (ECS & Colyseus) from Physics ---
     try {
-      const allPlayers = this.playerQuery(this.ecsWorld);
+      const allPlayers = this.playerQuery(this.ecsWorld); // Re-query in case entities changed
       for (const eid of allPlayers) {
         const rigidBody = this.eidToRapierBodyMap.get(eid);
-        if (!rigidBody) continue;
+        if (!rigidBody) continue; // Skip if body was removed
+
+        // Update ECS Position from Physics
         const pos = rigidBody.translation();
         if (hasComponent(this.ecsWorld, Position, eid)) {
           Position.x[eid] = pos.x;
           Position.y[eid] = pos.y;
           Position.z[eid] = pos.z;
+        } else {
+          // This shouldn't happen if component management is correct
+          // console.warn(`[MyRoom Update] Entity ${eid} has Rapier body but no Position component.`);
+          continue;
         }
+
+        // Update Colyseus State from ECS Position
         const clientId = this.findClientIdByEid(eid);
         if (clientId) {
           const playerState = this.state.players.get(clientId);
-          if (playerState && hasComponent(this.ecsWorld, Position, eid)) {
-            const posX = Position.x[eid];
-            const posY = Position.y[eid];
-            const posZ = Position.z[eid];
-            if (
-              posX !== undefined &&
-              posY !== undefined &&
-              posZ !== undefined
-            ) {
-              playerState.x = posX;
-              playerState.y = posY;
-              playerState.z = posZ;
-            }
+          // Ensure playerState exists before updating
+          if (playerState) {
+            playerState.x = Position.x[eid];
+            playerState.y = Position.y[eid];
+            playerState.z = Position.z[eid];
+          } else {
+            // Player state might not exist if join processing is pending
+            // console.warn(`[MyRoom Update] Colyseus state for client ${clientId} (eid: ${eid}) not found during sync.`);
           }
         }
       }
     } catch (e) {
       console.error("[MyRoom Update] Error during state sync:", e);
-      return;
+      return; // Stop update on error
     }
 
     // --- Handle Player State Additions/Removals (Colyseus State side) ---
+    // Note: Using enter/exit queries helps manage Colyseus state based on component presence
     try {
       const entered = this.playerQueryEnter(this.ecsWorld);
       for (const eid of entered) {
         const clientId = this.findClientIdByEid(eid);
+        // Ensure client ID exists, state doesn't already exist, and required component is present
         if (
           clientId &&
           !this.state.players.has(clientId) &&
@@ -300,14 +333,10 @@ export class MyRoom extends Room<MyRoomState> {
             `[Colyseus State] Adding player ${clientId} (eid: ${eid})`
           );
           const playerState = new PlayerState();
-          const posX = Position.x[eid];
-          const posY = Position.y[eid];
-          const posZ = Position.z[eid];
-          if (posX !== undefined && posY !== undefined && posZ !== undefined) {
-            playerState.x = posX;
-            playerState.y = posY;
-            playerState.z = posZ;
-          }
+          // Initialize from current ECS position
+          playerState.x = Position.x[eid];
+          playerState.y = Position.y[eid];
+          playerState.z = Position.z[eid];
           this.state.players.set(clientId, playerState);
         }
       }
@@ -318,11 +347,16 @@ export class MyRoom extends Room<MyRoomState> {
 
     try {
       const exited = this.playerQueryExit(this.ecsWorld);
+      // Collect IDs first to avoid modifying map while iterating if needed
       const exitedClientIds: string[] = [];
       for (const eid of exited) {
         const clientId = this.findClientIdByEid(eid);
-        if (clientId) exitedClientIds.push(clientId);
+        if (clientId) {
+          exitedClientIds.push(clientId);
+          // Note: Rapier/ECS cleanup happens in onLeave, this query handles Colyseus state sync
+        }
       }
+      // Remove from Colyseus state
       for (const clientId of exitedClientIds) {
         if (this.state.players.has(clientId)) {
           console.log(`[Colyseus State] Removing player state for ${clientId}`);
@@ -335,55 +369,64 @@ export class MyRoom extends Room<MyRoomState> {
     }
   }
 
-  onLeave(client: Client, _consented: boolean) {
+  // Prefix unused '_consented' with _
+  onLeave(client: Client, _consented: boolean): void {
+    // Explicitly void return type
     const eid = this.clientEntityMap.get(client.sessionId);
     console.log(`[MyRoom] Client ${client.sessionId} left (eid: ${eid}).`);
 
-    if (eid !== undefined) {
-      this.clientEntityMap.delete(client.sessionId);
-    } else {
+    // Early exit if no entity mapping found
+    if (eid === undefined) {
       console.warn(
         `[MyRoom] Client ${client.sessionId} left, but no matching entity found in clientEntityMap.`
       );
       return;
     }
 
+    // Remove mapping first
+    this.clientEntityMap.delete(client.sessionId);
+
     try {
       const rigidBody = this.eidToRapierBodyMap.get(eid);
 
+      // --- Remove Rapier Physics Body ---
       if (rigidBody) {
         console.log(
           `[MyRoom] Found Rapier body object via eid ${eid}. Removing...`
         );
 
+        // Remove associated colliders FIRST
         const collidersToRemove: RAPIER.Collider[] = [];
         const numColliders = rigidBody.numColliders();
         for (let i = 0; i < numColliders; i++) {
-          const collider = rigidBody.collider(i);
+          const colliderHandle = rigidBody.collider(i); // This returns a handle (number)
+          const collider = this.rapierWorld.getCollider(colliderHandle); // Get Collider object from handle
           if (collider) {
             collidersToRemove.push(collider);
           }
         }
-        // Removed Debug log about collider count
+        // Remove colliders using the Collider object
         for (const collider of collidersToRemove) {
-          this.rapierWorld.removeCollider(collider, false);
+          this.rapierWorld.removeCollider(collider, false); // false = don't wake parent yet
         }
 
+        // Now remove the rigid body
         this.rapierWorld.removeRigidBody(rigidBody);
         console.log(
           `[MyRoom] Successfully removed Rapier body object for eid ${eid}.`
         );
 
+        // Clean up the map tracking Rapier bodies
         this.eidToRapierBodyMap.delete(eid);
-        // Removed Debug log about map cleanup
       } else {
-        // Keep this warning
+        // This might happen if onJoin failed after creating the entity but before creating the body
         console.warn(
           `[MyRoom] Could not find Rapier body in eidToRapierBodyMap for eid ${eid}. Cannot remove physics body.`
         );
       }
 
       // --- Remove ECS Components ---
+      // This triggers the exitQuery in the next update() call for Colyseus state sync
       console.log(
         `[MyRoom] Marking ECS components for removal for eid ${eid}.`
       );
@@ -392,27 +435,39 @@ export class MyRoom extends Room<MyRoomState> {
       if (hasComponent(this.ecsWorld, PlayerInput, eid))
         removeComponent(this.ecsWorld, PlayerInput, eid);
       if (hasComponent(this.ecsWorld, Velocity, eid))
-        removeComponent(this.ecsWorld, Velocity, eid);
+        removeComponent(this.ecsWorld, Velocity, eid); // Remove Velocity too
+
+      // Note: bitecs v1 removes entity+components immediately. No need to removeEntity explicitly usually.
     } catch (leaveError) {
       console.error(
         `!!! ERROR during onLeave processing for eid: ${eid} !!!`,
         leaveError
       );
+      // Log the error but don't prevent other cleanup if possible
     }
   }
 
-  onDispose() {
+  onDispose(): void {
+    // Explicitly void return type
     console.log("[MyRoom] Room disposed.");
+    // Clear maps
     this.clientEntityMap.clear();
     this.eidToRapierBodyMap.clear();
+
+    // Consider freeing Rapier world resources if available/necessary
+    // if (this.rapierWorld && typeof (this.rapierWorld as any).free === 'function') {
+    //     (this.rapierWorld as any).free();
+    //     console.log("[MyRoom] Rapier world resources freed.");
+    // }
   }
 
+  // Helper to find clientId from eid
   private findClientIdByEid(eid: number): string | undefined {
     for (const [clientId, entityId] of this.clientEntityMap.entries()) {
-      if (entityId === eid) {
+      if (entityId === eoptiond) {
         return clientId;
       }
     }
-    return undefined;
+    return undefined; // Explicitly return undefined if not found
   }
 } // End of MyRoom class definition
