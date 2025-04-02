@@ -66,8 +66,6 @@ let room: Colyseus.Room | null = null; // Variable to hold the room instance
 async function connect() {
   // No try/catch here, let the caller handle it
   console.log("[Colyseus] Attempting to join or create room...");
-  // Use a more specific type if you have one, otherwise disable the rule for this line
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   room = await client.joinOrCreate<any>("my_room"); // Using <any> for state initially
 
   console.log("[Colyseus] Joined room successfully!");
@@ -106,26 +104,28 @@ window.addEventListener("resize", () => {
 
 // --- Initiate Connection (with error handling) ---
 // Use an Immediately Invoked Async Function Expression (IIAFE)
-(async () => {
-    try {
-        await connect(); // Call the async connect function and wait for it
-        console.log("[Colyseus] Initial connection successful.");
-    } catch (e) {
-        // This catches errors specifically from the joinOrCreate call
-        console.error("[Colyseus] Failed initial connection:", e);
-        // Display an error message to the user on the page?
-        const body = document.querySelector('body');
-        if (body) {
-            const errorDiv = document.createElement('div');
-            errorDiv.textContent = `Failed to connect to server: ${e instanceof Error ? e.message : String(e)}`;
-            errorDiv.style.color = 'red';
-            errorDiv.style.position = 'absolute';
-            errorDiv.style.top = '10px';
-            errorDiv.style.left = '10px';
-            errorDiv.style.backgroundColor = 'black';
-            errorDiv.style.padding = '10px';
-            errorDiv.style.border = '1px solid red';
-            body.appendChild(errorDiv);
-        }
+void (async () => {
+  try {
+    await connect(); // Call the async connect function and wait for it
+    console.log("[Colyseus] Initial connection successful.");
+  } catch (e) {
+    // This catches errors specifically from the joinOrCreate call
+    console.error("[Colyseus] Failed initial connection:", e);
+    // Display an error message to the user on the page?
+    const body = document.querySelector("body");
+    if (body) {
+      const errorDiv = document.createElement("div");
+      errorDiv.textContent = `Failed to connect to server: ${e instanceof Error ? e.message : String(e)}`;
+      // Style the error message (optional but helpful)
+      errorDiv.style.color = "red";
+      errorDiv.style.position = "absolute";
+      errorDiv.style.top = "10px";
+      errorDiv.style.left = "10px";
+      errorDiv.style.zIndex = "1000"; // Ensure it's visible
+      errorDiv.style.backgroundColor = "black";
+      errorDiv.style.padding = "10px";
+      errorDiv.style.border = "1px solid red";
+      body.appendChild(errorDiv);
     }
+  }
 })(); // <-- Invoke the function immediately
