@@ -3,23 +3,18 @@
 # Specify the language/environment
 language = "typescript"
 
-[packager]
-  # language = "nodejs" # Or similar, might already exist
-  # guessImports = true   # Might already exist
-
-[packager.hooks]
-  # This command runs when the Repl boots/wakes up
-  onBoot = "npm install --no-audit --prefer-offline --no-fund --quiet"
-  # You can just use "npm install", but the flags can sometimes speed it up
-  # and reduce extra console output:
-  # --no-audit: Skips the security audit check
-  # --prefer-offline: Uses local cache first if possible
-  # --no-fund: Hides funding messages
-  # --quiet: Reduces npm's output
+# This command runs when the Repl boots/wakes up
+onBoot = "npm install --no-audit --prefer-offline --no-fund --quiet"
+# You can just use "npm install", but the flags can sometimes speed it up
+# and reduce extra console output:
+# --no-audit: Skips the security audit check
+# --prefer-offline: Uses local cache first if possible
+# --no-fund: Hides funding messages
+# --quiet: Reduces npm's output
 
 # Define the command executed when the 'Run' button is pressed
 # Installs, builds client, builds server, starts server
-# run = "npm install --only=prod && npm run build --prefix client && npm run build --prefix server && npm start --prefix server"
+#run = "npm install --only=prod && npm run build --prefix client && npm run build --prefix server && npm start --prefix server"
 # removed run install after adding onBoot install
 run = "npm run build --prefix client && npm run build --prefix server && npm start --prefix server"
 

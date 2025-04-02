@@ -11,3 +11,7 @@ Code Formatting: Prettier
 Code Linting: ESLint
 
 Unit Testing: Vitest
+
+Physics: rapier3d-compat
+
+Entity Component System (ECS): bitECS

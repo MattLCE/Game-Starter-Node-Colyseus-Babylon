@@ -41,7 +41,7 @@ app.get("*", (req, res) => {
 });
 
 // --- Attach Colyseus WebSocket Transport ---
-gameServer.attach({ server });
+// gameServer.attach({ server }); // was redundant and confusing Colyseus
 
 // --- Start Listening ---
 server
