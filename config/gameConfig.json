@@ -1,0 +1,22 @@
+{
+  "server": {
+    "port": 2567,
+    "tickRate": 60
+  },
+  "physics": {
+    "gravityY": -9.81,
+    "playerSpeed": 5.0,
+    "playerImpulseFactor": 0.2
+  },
+  "worldGen": {
+    "seed": "BountyfullDefault", // Or null to generate random
+    "terrainWidth": 50,
+    "terrainHeight": 50,
+    "terrainSubdivisions": 20, // For client-side mesh detail
+    "heightScale": 5 // How much heightmap values affect actual Y
+  },
+  "gameplay": {
+    "initialSpawnRadius": 10.0,
+     "dropShipLeaveTime": 600 // seconds (10 minutes)
+  }
+}

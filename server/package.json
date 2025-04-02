@@ -18,7 +18,8 @@
     "@dimforge/rapier3d-compat": "^0.15.0",
     "@types/express": "^5.0.1",
     "bitecs": "^0.3.40",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "simplex-noise": "^4.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.17",
