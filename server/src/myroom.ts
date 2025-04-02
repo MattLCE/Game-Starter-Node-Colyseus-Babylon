@@ -14,13 +14,54 @@ import {
   addEntity,
   Query,
   createWorld,
+  removeEntity,
 } from "bitecs";
 import RAPIER from "@dimforge/rapier3d-compat";
+import fs from "fs";
+import path from "path";
+import { createNoise2D, RandomFn } from "simplex-noise"; // Import RandomFn type
+
+// -- Configuration Interface --
+interface GameConfig {
+  server: { port: number; tickRate: number };
+  physics: {
+    gravityY: number;
+    playerSpeed: number;
+    playerImpulseFactor: number;
+  };
+  worldGen: {
+    seed: string | null;
+    terrainWidth: number;
+    terrainHeight: number;
+    terrainSubdivisions: number;
+    heightScale: number;
+  };
+  gameplay: {
+    initialSpawnRadius: number;
+    dropShipLeaveTime: number;
+  };
+}
+
+// -- Helper: Simple Seeded PRNG (Mulberry32) --
+function mulberry32(seedStr: string): RandomFn {
+  let h = 1779033703 ^ seedStr.length;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // -- ECS Components --
 export const Vector3Schema = { x: Types.f32, y: Types.f32, z: Types.f32 };
 export const Position = defineComponent(Vector3Schema);
-export const Velocity = defineComponent(Vector3Schema); // Keep Velocity component
+export const Velocity = defineComponent(Vector3Schema);
 export const PlayerInput = defineComponent({
   left: Types.ui8,
   right: Types.ui8,
@@ -34,13 +75,16 @@ export class PlayerState extends Schema {
   @type("number") y: number = 0;
   @type("number") z: number = 0;
 }
-
 export class MyRoomState extends Schema {
+  @type("string") worldSeed: string = "default";
+  @type("number") terrainWidth: number = 50;
+  @type("number") terrainHeight: number = 50;
+  @type("number") terrainSubdivisions: number = 20;
+  @type("number") heightScale: number = 5;
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
 }
 
 // -- Interfaces --
-// Exporting InputPayload to fix TS2742 in test file
 export interface InputPayload {
   left: boolean;
   right: boolean;
@@ -48,529 +92,379 @@ export interface InputPayload {
   backward: boolean;
 }
 
+// -- World Generation Logic --
+class WorldGenerator {
+  private noise2D: ReturnType<typeof createNoise2D>;
+  private heightMapData: number[] = [];
+  private config: GameConfig["worldGen"];
+  private points: number;
+  private readonly noiseScaleFactor = 0.1;
+  constructor(config: GameConfig["worldGen"], seed: string) {
+    this.config = config;
+    this.noise2D = createNoise2D(mulberry32(seed));
+    this.points = this.config.terrainSubdivisions + 1;
+    this.generateHeightMapData();
+    console.log(
+      `[WorldGenerator] Initialized with seed: ${seed}, Size: ${config.terrainWidth}x${config.terrainHeight}, Scale: ${config.heightScale}`
+    );
+  }
+  private generateHeightMapData(): void {
+    const { terrainWidth, terrainHeight, heightScale } = this.config;
+    this.heightMapData = [];
+    for (let j = 0; j < this.points; j++) {
+      for (let i = 0; i < this.points; i++) {
+        const x = (i / (this.points - 1)) * terrainWidth - terrainWidth / 2;
+        const z = (j / (this.points - 1)) * terrainHeight - terrainHeight / 2;
+        const noiseValue = this.noise2D(
+          x * this.noiseScaleFactor,
+          z * this.noiseScaleFactor
+        );
+        const h = ((noiseValue + 1) / 2) * heightScale;
+        this.heightMapData.push(h);
+      }
+    }
+    console.log(
+      `[WorldGenerator] Heightmap generated (${this.heightMapData.length} values).`
+    );
+  }
+  public getHeightAt(worldX: number, worldZ: number): number {
+    if (this.heightMapData.length === 0) return 0;
+    const { terrainWidth, terrainHeight } = this.config;
+    const normX = (worldX + terrainWidth / 2) / terrainWidth;
+    const normZ = (worldZ + terrainHeight / 2) / terrainHeight;
+    const u = Math.max(0, Math.min(1, normX));
+    const v = Math.max(0, Math.min(1, normZ));
+    const gridI = Math.min(this.points - 1, Math.floor(u * (this.points - 1)));
+    const gridJ = Math.min(this.points - 1, Math.floor(v * (this.points - 1)));
+    const index = gridJ * this.points + gridI;
+    return this.heightMapData[index] ?? 0;
+  }
+}
+
 // -- Room Logic --
 export class MyRoom extends Room<MyRoomState> {
-  // Make properties definite assignment asserted (!) or initialize directly
-  // if confident they are set in onCreate before use.
+  private config!: GameConfig;
   private ecsWorld!: IWorld;
   private rapierWorld!: RAPIER.World;
+  private worldGenerator!: WorldGenerator;
   private playerQuery!: Query;
   private playerQueryEnter!: Query;
   private playerQueryExit!: Query;
-
   private clientEntityMap: Map<string, number> = new Map();
   private eidToRapierBodyMap: Map<number, RAPIER.RigidBody> = new Map();
 
-  private readonly fixedTimeStep = 1 / 60;
-  private readonly speed = 5.0;
-  private readonly impulseFactor = 0.2; // Factor for applying impulse difference
-
   async onCreate(_options: unknown) {
-    // Use unknown for unused options
+    console.log("[MyRoom] onCreate() called.");
     try {
-      console.log("[MyRoom] Room creating! Initializing...");
+      this.loadConfiguration();
+      this.setState(new MyRoomState());
+      console.log("[MyRoom] Initial Colyseus State Set.");
       this.ecsWorld = createWorld();
-      // Define components used in queries explicitly for clarity
-      const playerComponents = [Position, PlayerInput];
+      const playerComponents = [Position, Velocity, PlayerInput];
       this.playerQuery = defineQuery(playerComponents);
-      // Create enter/exit queries based on the same component set
       const baseQuery = defineQuery(playerComponents);
       this.playerQueryEnter = enterQuery(baseQuery);
       this.playerQueryExit = exitQuery(baseQuery);
       console.log("[MyRoom] ECS World & Queries Initialized.");
-
-      // Initialize Rapier (ensure this is awaited)
+      const seed =
+        this.config.worldGen.seed ?? Math.random().toString(36).substring(7);
+      this.worldGenerator = new WorldGenerator(this.config.worldGen, seed);
+      this.state.worldSeed = seed;
+      this.state.terrainWidth = this.config.worldGen.terrainWidth;
+      this.state.terrainHeight = this.config.worldGen.terrainHeight;
+      this.state.terrainSubdivisions = this.config.worldGen.terrainSubdivisions;
+      this.state.heightScale = this.config.worldGen.heightScale;
+      console.log("[MyRoom] World generation parameters synced to state.");
       await RAPIER.init();
       console.log("[MyRoom] Rapier WASM Initialized.");
-
-      const gravity = { x: 0.0, y: -9.81, z: 0.0 };
+      const gravity = { x: 0.0, y: this.config.physics.gravityY, z: 0.0 };
       this.rapierWorld = new RAPIER.World(gravity);
       console.log("[MyRoom] Rapier World Created.");
-
-      // Create Ground
-      const groundSize = 25.0;
-      const groundHeight = 0.1;
       const groundColliderDesc = RAPIER.ColliderDesc.cuboid(
-        groundSize,
-        groundHeight,
-        groundSize
-      );
+        this.state.terrainWidth / 2,
+        0.1,
+        this.state.terrainHeight / 2
+      )
+        .setTranslation(0, -0.1, 0)
+        .setFriction(1.0)
+        .setRestitution(0.1);
       this.rapierWorld.createCollider(groundColliderDesc);
-      console.log("[MyRoom] Rapier Ground Created.");
+      console.log("[MyRoom] Flat Rapier Ground Collider Created for physics.");
 
-      this.setState(new MyRoomState());
-      console.log("[MyRoom] Initial Colyseus State Set.");
-
-      // Register the message handler METHOD
+      // *** REGISTER THE ARROW FUNCTION VERSION ***
       this.onMessage<InputPayload>("input", this.handleInputMessage);
       console.log("[MyRoom] Message Handlers Set.");
 
-      // Start simulation loop
-      this.setSimulationInterval((deltaTime) => {
-        try {
-          // Add checks for world initialization robustness
-          if (!this.ecsWorld || !this.rapierWorld) {
-            console.warn(
-              "[MyRoom Update] Skipping update, world not initialized."
+      this.setSimulationInterval(
+        (_dt) => {
+          try {
+            this.update();
+          } catch (e) {
+            console.error("[Update Loop Err]", e);
+            this.clock.clear();
+            this.disconnect().catch((err) =>
+              console.error("Disconnect err:", err)
             );
-            return;
           }
-          this.update(deltaTime / 1000); // Convert ms to seconds
-        } catch (e) {
-          console.error("[MyRoom Update Loop Error]", e);
-          // Attempt graceful shutdown on loop error
-          this.clock.clear(); // Stop simulation interval
-          this.disconnect().catch((err) =>
-            console.error(
-              "Error disconnecting room after update loop failure:",
-              err
-            )
-          );
-        }
-      }, this.fixedTimeStep * 1000); // Interval in milliseconds
-
+        },
+        (1 / this.config.server.tickRate) * 1000
+      );
       console.log("[MyRoom] Simulation Loop Started. Initialization Complete.");
     } catch (initError) {
-      console.error("!!! CRITICAL ERROR DURING onCreate !!!", initError);
-      // Ensure disconnect is attempted even if init fails
-      this.disconnect().catch((e) =>
-        console.error("Error disconnecting room after onCreate failure:", e)
-      );
-      // Re-throw or handle appropriately if needed outside
-      // throw initError;
+      console.error("!!! CRITICAL onCreate ERROR !!!", initError);
+      this.disconnect().catch((e) => console.error("Disconnect err:", e));
     }
   }
 
-  // Public method to handle input messages (moved from inline)
-  public handleInputMessage(client: Client, message: InputPayload): void {
+  private loadConfiguration(): void {
+    try {
+      const confPath = path.resolve(__dirname, "../../config/gameConfig.json");
+      console.log(`[Config] Loading from: ${confPath}`);
+      const rawConf = fs.readFileSync(confPath, "utf-8");
+      this.config = JSON.parse(rawConf);
+      console.log("[Config] Loaded successfully.");
+    } catch (error) {
+      console.error("!!! FATAL: Failed to load gameConfig.json !!!", error);
+      throw new Error("Failed loading config.");
+    }
+  }
+
+  // *** DEFINE AS ARROW FUNCTION PROPERTY ***
+  public handleInputMessage = (client: Client, message: InputPayload): void => {
+    // 'this' here will now correctly refer to the MyRoom instance
     const eid = this.clientEntityMap.get(client.sessionId);
-    // Check if entity exists and has the necessary component
     if (eid !== undefined && hasComponent(this.ecsWorld, PlayerInput, eid)) {
       PlayerInput.left[eid] = message.left ? 1 : 0;
       PlayerInput.right[eid] = message.right ? 1 : 0;
       PlayerInput.forward[eid] = message.forward ? 1 : 0;
       PlayerInput.backward[eid] = message.backward ? 1 : 0;
     } else {
-      console.warn(
-        `[MyRoom] Received input from client ${client.sessionId} (eid: ${eid}), but entity/component not found.`
-      );
+      // console.warn(`[Input] Input from ${client.sessionId} (eid: ${eid}), entity/component not found.`);
     }
-  }
+  }; // <-- Note the '=' and arrow '=>', and the semicolon ';'
 
   onJoin(client: Client, _options: unknown) {
-    // Use unknown for unused options
-    // Check world initialization *before* proceeding
-    if (!this.ecsWorld || !this.rapierWorld) {
-      console.error(
-        `!!! ERROR during onJoin for client ${client.sessionId}: World not initialized! Disconnecting client.`
-      );
-      client.leave(); // Attempt to disconnect the client
-      return; // Stop further processing
+    if (!this.ecsWorld || !this.rapierWorld || !this.worldGenerator) {
+      console.error(`!!! ERROR onJoin ${client.sessionId}: Systems not ready!`);
+      client.leave();
+      return;
     }
-
     try {
-      console.log(
-        `[MyRoom] Client ${client.sessionId} joined! Creating entity...`
-      );
-
-      // Create ECS Entity and add components
+      console.log(`[Join] ${client.sessionId} joined! Creating entity...`);
       const eid = addEntity(this.ecsWorld);
+      const spawnRadius = this.config.gameplay.initialSpawnRadius;
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.sqrt(Math.random()) * spawnRadius;
+      const spawnX = Math.cos(angle) * radius;
+      const spawnZ = Math.sin(angle) * radius;
+      const spawnHeight = this.worldGenerator.getHeightAt(spawnX, spawnZ) + 1.0;
+      // console.log(`[Join] Spawning ${client.sessionId} at (${spawnX.toFixed(2)}, ${spawnHeight.toFixed(2)}, ${spawnZ.toFixed(2)})`);
       addComponent(this.ecsWorld, Position, eid);
-      addComponent(this.ecsWorld, PlayerInput, eid);
-      // Initialize Velocity component if kept
       addComponent(this.ecsWorld, Velocity, eid);
-
-      // Initialize Component Values
-      Position.x[eid] = Math.random() * 10 - 5; // Random start position
-      Position.y[eid] = 1.0; // Start slightly above ground
-      Position.z[eid] = Math.random() * 10 - 5;
+      addComponent(this.ecsWorld, PlayerInput, eid);
+      Position.x[eid] = spawnX;
+      Position.y[eid] = spawnHeight;
+      Position.z[eid] = spawnZ;
+      Velocity.x[eid] = 0;
+      Velocity.y[eid] = 0;
+      Velocity.z[eid] = 0;
       PlayerInput.left[eid] = 0;
       PlayerInput.right[eid] = 0;
       PlayerInput.forward[eid] = 0;
       PlayerInput.backward[eid] = 0;
-      Velocity.x[eid] = 0; // Initialize Velocity
-      Velocity.y[eid] = 0;
-      Velocity.z[eid] = 0;
-
-      // Create Rapier Body and Collider
       const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(Position.x[eid], Position.y[eid], Position.z[eid])
-        .setLinvel(0, 0, 0) // Start with zero linear velocity
-        .setCcdEnabled(false); // CCD not needed for simple movement usually
+        .setLinvel(0, 0, 0)
+        .setCcdEnabled(false);
       const rigidBody = this.rapierWorld.createRigidBody(rigidBodyDesc);
-
-      const playerSize = 0.5; // Half-size for cuboid collider
+      const playerSize = 0.5;
       const colliderDesc = RAPIER.ColliderDesc.cuboid(
         playerSize,
         playerSize,
         playerSize
       )
         .setRestitution(0.1)
-        .setFriction(0.5);
-      // Associate collider with the rigid body
+        .setFriction(0.8);
       this.rapierWorld.createCollider(colliderDesc, rigidBody);
-
-      // Store mappings
       this.eidToRapierBodyMap.set(eid, rigidBody);
       this.clientEntityMap.set(client.sessionId, eid);
-
       console.log(
-        `[MyRoom] Created ECS entity ${eid} and Rapier body for client ${client.sessionId}.`
+        `[Join] Created ECS entity ${eid} & Rapier body for ${client.sessionId}.`
       );
     } catch (joinError) {
-      console.error(
-        `!!! ERROR during onJoin processing for client ${client.sessionId} !!!`,
-        joinError
-      );
-      // Attempt to leave the client if an error occurs during setup
+      console.error(`!!! ERROR onJoin ${client.sessionId} !!!`, joinError);
       try {
         client.leave();
-      } catch (leaveError) {
-        console.error(
-          "Error trying to force leave client after join error:",
-          leaveError
-        );
+      } catch (e) {
+        console.error("Err leaving client:", e);
       }
-      // Clean up potentially partially created resources if possible (tricky)
       const eid = this.clientEntityMap.get(client.sessionId);
-      if (eid !== undefined) {
-        this.cleanupEntityResources(eid, client.sessionId); // Call cleanup helper
-      }
+      if (eid !== undefined) this.cleanupEntityResources(eid, client.sessionId);
     }
   }
 
-  update(deltaTime: number): void {
-    // Use deltaTime if needed for physics/logic
-    // Essential checks at the start of the update loop
-    if (
-      !this.state ||
-      !this.ecsWorld ||
-      !this.rapierWorld ||
-      !this.playerQuery ||
-      !this.playerQueryEnter ||
-      !this.playerQueryExit
-    ) {
-      console.warn(
-        "[MyRoom Update] Skipping update due to uninitialized state or queries."
-      );
+  update(): void {
+    if (!this.state || !this.ecsWorld || !this.rapierWorld || !this.playerQuery)
       return;
-    }
-
-    // --- Process Input and Apply Forces ---
+    // 1. Input -> Physics
     try {
-      const movingEntities = this.playerQuery(this.ecsWorld);
-      for (const eid of movingEntities) {
-        const rigidBody = this.eidToRapierBodyMap.get(eid);
-        // Skip if rigid body doesn't exist for this entity
-        if (!rigidBody) continue;
-
-        // Calculate desired velocity based on input
-        const impulse = { x: 0, y: 0, z: 0 };
+      const moving = this.playerQuery(this.ecsWorld);
+      for (const eid of moving) {
+        const body = this.eidToRapierBodyMap.get(eid);
+        if (!body) continue;
+        const imp = { x: 0, y: 0, z: 0 };
         let isMoving = false;
         if (PlayerInput.forward[eid]) {
-          impulse.z += 1;
+          imp.z += 1;
           isMoving = true;
         }
         if (PlayerInput.backward[eid]) {
-          impulse.z -= 1;
+          imp.z -= 1;
           isMoving = true;
         }
         if (PlayerInput.left[eid]) {
-          impulse.x -= 1;
+          imp.x -= 1;
           isMoving = true;
         }
         if (PlayerInput.right[eid]) {
-          impulse.x += 1;
+          imp.x += 1;
           isMoving = true;
         }
-
         if (isMoving) {
-          // Normalize diagonal movement and apply speed
-          const magnitude = Math.sqrt(
-            impulse.x * impulse.x + impulse.z * impulse.z
-          );
-          if (magnitude > 0) {
-            impulse.x = (impulse.x / magnitude) * this.speed;
-            impulse.z = (impulse.z / magnitude) * this.speed;
+          const mag = Math.sqrt(imp.x * imp.x + imp.z * imp.z);
+          const speed = this.config.physics.playerSpeed;
+          if (mag > 0) {
+            imp.x = (imp.x / mag) * speed;
+            imp.z = (imp.z / mag) * speed;
           }
-          // Apply impulse to reach target velocity smoothly
-          const currentVel = rigidBody.linvel();
-          // Calculate the difference needed, scaled by a factor for smooth acceleration
-          const impulseDiff = {
-            x: (impulse.x - currentVel.x) * this.impulseFactor,
-            y: 0, // Don't apply vertical impulse based on horizontal input
-            z: (impulse.z - currentVel.z) * this.impulseFactor,
+          const vel = body.linvel();
+          const factor = this.config.physics.playerImpulseFactor;
+          const diff = {
+            x: (imp.x - vel.x) * factor,
+            y: 0,
+            z: (imp.z - vel.z) * factor,
           };
-          // Apply impulse (mass is implicitly 1 here)
-          rigidBody.applyImpulse(impulseDiff, true);
-        } else {
-          // Optional: Apply damping when no input to stop faster
-          // const currentVel = rigidBody.linvel();
-          // rigidBody.setLinvel({ x: currentVel.x * 0.8, y: currentVel.y, z: currentVel.z * 0.8 }, true);
+          body.applyImpulse(diff, true);
         }
       }
     } catch (e) {
-      console.error("[MyRoom Update] Error during input processing:", e);
-      return; // Stop update if input processing fails
+      console.error("[Update] Input error:", e);
+      return;
     }
-
-    // --- Step Physics Simulation ---
+    // 2. Step Physics
     try {
       this.rapierWorld.step();
     } catch (e) {
-      console.error("[MyRoom Update] Error during Rapier step:", e);
-      return; // Stop update if physics fails
+      console.error("[Update] Rapier error:", e);
+      return;
     }
-
-    // --- Sync State (ECS & Colyseus) from Physics ---
+    // 3. Sync State from Physics
     try {
-      const allPlayers = this.playerQuery(this.ecsWorld);
-      for (const eid of allPlayers) {
-        const rigidBody = this.eidToRapierBodyMap.get(eid);
-        // Skip if entity doesn't have a rigid body mapped
-        if (!rigidBody) continue;
-
-        const pos = rigidBody.translation();
-        const vel = rigidBody.linvel(); // Get linear velocity too
-
-        // Update ECS Position component if it exists
+      const players = this.playerQuery(this.ecsWorld);
+      for (const eid of players) {
+        const body = this.eidToRapierBodyMap.get(eid);
+        if (!body) continue;
+        const pos = body.translation();
+        const vel = body.linvel();
         if (hasComponent(this.ecsWorld, Position, eid)) {
           Position.x[eid] = pos.x;
           Position.y[eid] = pos.y;
           Position.z[eid] = pos.z;
-        } else {
-          // Log warning if Position component is missing unexpectedly
-          console.warn(
-            `[MyRoom Update] Entity ${eid} has RigidBody but missing Position component.`
-          );
-          continue; // Skip to next entity if essential component missing
         }
-        // Update ECS Velocity component if it exists
         if (hasComponent(this.ecsWorld, Velocity, eid)) {
           Velocity.x[eid] = vel.x;
           Velocity.y[eid] = vel.y;
           Velocity.z[eid] = vel.z;
         }
-
-        // Update Colyseus state if player exists
-        const clientId = this.findClientIdByEid(eid);
-        if (clientId) {
-          const playerState = this.state.players.get(clientId);
-          if (playerState) {
-            // Use nullish coalescing for safety when reading from ECS
-            playerState.x = Position.x[eid] ?? 0;
-            playerState.y = Position.y[eid] ?? 0;
-            playerState.z = Position.z[eid] ?? 0;
-          } else {
-            // This case (entity exists but no player state) might indicate a race condition
-            // or logic error where player state wasn't created/synced properly earlier.
-            console.warn(
-              `[MyRoom Update] Found ECS entity ${eid} for client ${clientId}, but no matching Colyseus player state.`
-            );
+        const cId = this.findClientIdByEid(eid);
+        if (cId) {
+          const pState = this.state.players.get(cId);
+          if (pState) {
+            pState.x = pos.x;
+            pState.y = pos.y;
+            pState.z = pos.z;
           }
         }
       }
     } catch (e) {
-      console.error("[MyRoom Update] Error during state sync from physics:", e);
-      return; // Stop update on sync error
+      console.error("[Update] Sync error:", e);
+      return;
     }
-
-    // --- Handle Player State Additions (Colyseus State side using enterQuery) ---
+    // 4. Handle Player State Add/Remove
     try {
-      const enteredEntities = this.playerQueryEnter(this.ecsWorld);
-      for (const eid of enteredEntities) {
-        const clientId = this.findClientIdByEid(eid);
-        // Ensure client is mapped, state doesn't already exist, and Position exists
+      const entered = this.playerQueryEnter(this.ecsWorld);
+      for (const eid of entered) {
+        const cId = this.findClientIdByEid(eid);
         if (
-          clientId &&
-          !this.state.players.has(clientId) &&
+          cId &&
+          !this.state.players.has(cId) &&
           hasComponent(this.ecsWorld, Position, eid)
         ) {
-          console.log(
-            `[Colyseus State] Syncing ADD for player ${clientId} (eid: ${eid})`
-          );
-          const playerState = new PlayerState();
-          // Initialize state from current ECS data (use default if missing)
-          playerState.x = Position.x[eid] ?? 0;
-          playerState.y = Position.y[eid] ?? 0;
-          playerState.z = Position.z[eid] ?? 0;
-          this.state.players.set(clientId, playerState);
-        } else if (clientId && this.state.players.has(clientId)) {
-          console.warn(
-            `[MyRoom Update] Enter query triggered for eid ${eid} (client: ${clientId}), but player state already exists.`
-          );
+          const pState = new PlayerState();
+          pState.x = Position.x[eid] ?? 0;
+          pState.y = Position.y[eid] ?? 0;
+          pState.z = Position.z[eid] ?? 0;
+          this.state.players.set(cId, pState);
+        }
+      }
+      const exited = this.playerQueryExit(this.ecsWorld);
+      for (const eid of exited) {
+        const cId = this.findClientIdByEid(eid);
+        if (cId && this.state.players.has(cId)) {
+          this.state.players.delete(cId);
         }
       }
     } catch (e) {
-      console.error("[MyRoom Update] Error during player join sync:", e);
-      return; // Stop update on error
-    }
-
-    // --- Handle Player State Removals (Colyseus State side using exitQuery) ---
-    try {
-      const exitedEntities = this.playerQueryExit(this.ecsWorld);
-      // Collect client IDs first to avoid issues if findClientIdByEid relies on maps being modified
-      const exitedClientIds: string[] = [];
-      for (const eid of exitedEntities) {
-        const clientId = this.findClientIdByEid(eid); // Find client ID based on exited eid
-        if (clientId) {
-          exitedClientIds.push(clientId);
-        } else {
-          // This indicates an entity was removed from ECS player query
-          // but we couldn't map it back to a client ID. Might happen if cleanup was partial.
-          console.warn(
-            `[MyRoom Update] Exit query triggered for eid ${eid}, but could not find matching client ID.`
-          );
-        }
-      }
-
-      // Now remove the state for the collected client IDs
-      for (const clientId of exitedClientIds) {
-        if (this.state.players.has(clientId)) {
-          console.log(
-            `[Colyseus State] Syncing REMOVE for player state ${clientId}`
-          );
-          this.state.players.delete(clientId);
-        } else {
-          // This might happen if onLeave already removed the state, which is okay.
-          // console.log(`[MyRoom Update] Exit query indicated removal for client ${clientId}, but player state was already gone.`);
-        }
-      }
-    } catch (e) {
-      console.error("[MyRoom Update] Error during player leave sync:", e);
-      // Don't necessarily stop the whole update loop here, but log the error.
+      console.error("[Update] Enter/exit error:", e);
     }
   }
 
-  // Helper function for cleaning up entity resources
-  private cleanupEntityResources(eid: number, clientId?: string) {
-    const clientDesc = clientId
-      ? `client ${clientId} (eid ${eid})`
-      : `eid ${eid}`;
-    console.log(`[MyRoom] Cleaning up resources for ${clientDesc}...`);
-
-    try {
-      // --- Remove Rapier Objects ---
-      const rigidBody = this.eidToRapierBodyMap.get(eid);
-      if (rigidBody) {
-        // Collect colliders associated with the rigid body
-        const collidersToRemove: RAPIER.Collider[] = [];
-        const numColliders = rigidBody.numColliders();
-        for (let i = 0; i < numColliders; i++) {
-          // Rapier's rigidBody.collider(i) returns the handle
-          const colliderHandle = rigidBody.collider(i);
-          // Use the handle to get the Collider object from the world
-          // *** FIX TS2345: Pass the numeric handle ***
-          const collider = this.rapierWorld.getCollider(colliderHandle.handle);
-          if (collider) {
-            collidersToRemove.push(collider);
-          } else {
-            console.warn(
-              `[MyRoom Cleanup] Could not find collider object for handle ${colliderHandle.handle} associated with rigid body of ${clientDesc}`
-            );
-          }
-        }
-        // Remove collected colliders (pass false to avoid immediate world update if batching)
-        for (const collider of collidersToRemove) {
-          this.rapierWorld.removeCollider(collider, false); // Remove collider itself
-        }
-        // Remove the rigid body itself
-        this.rapierWorld.removeRigidBody(rigidBody);
-        console.log(
-          `[MyRoom Cleanup] Removed Rapier body and ${collidersToRemove.length} colliders for ${clientDesc}.`
-        );
-      } else {
-        console.warn(
-          `[MyRoom Cleanup] Could not find Rapier body to remove for ${clientDesc}.`
-        );
+  private cleanupEntityResources(eid: number, clientId?: string): void {
+    const desc = clientId ? `client ${clientId} (eid ${eid})` : `eid ${eid}`;
+    /* console.log(`[Cleanup] ${desc}...`); */ try {
+      const body = this.eidToRapierBodyMap.get(eid);
+      if (body) {
+        this.rapierWorld.removeRigidBody(body);
+        this.eidToRapierBodyMap.delete(eid);
       }
-      // Clean up map regardless of whether body was found
-      this.eidToRapierBodyMap.delete(eid);
-
-      // --- Remove ECS Components ---
-      // Check existence before removing to avoid potential bitecs warnings/errors
       if (hasComponent(this.ecsWorld, Position, eid))
         removeComponent(this.ecsWorld, Position, eid);
+      if (hasComponent(this.ecsWorld, Velocity, eid))
+        removeComponent(this.ecsWorld, Velocity, eid);
       if (hasComponent(this.ecsWorld, PlayerInput, eid))
         removeComponent(this.ecsWorld, PlayerInput, eid);
-      if (hasComponent(this.ecsWorld, Velocity, eid))
-        removeComponent(this.ecsWorld, Velocity, eid); // Remove Velocity too
-      // Note: bitecs doesn't have removeEntity directly, removing components effectively orphans the eid
-
-      console.log(`[MyRoom Cleanup] Removed ECS components for ${clientDesc}.`);
-    } catch (cleanupError) {
-      console.error(
-        `!!! ERROR during resource cleanup for ${clientDesc} !!!`,
-        cleanupError
-      );
+      removeEntity(this.ecsWorld, eid);
+    } catch (e) {
+      console.error(`!!! ERROR cleanup ${desc} !!!`, e);
     }
   }
-
   onLeave(client: Client, _consented: boolean): void {
-    // Use unknown for unused parameter
-    const entityId = this.clientEntityMap.get(client.sessionId);
-    const clientId = client.sessionId; // Store for logging consistency
-
-    console.log(
-      `[MyRoom] Client ${clientId} left (eid: ${entityId}). Initiating cleanup...`
-    );
-
-    if (entityId === undefined) {
-      console.warn(
-        `[MyRoom] Client ${clientId} left, but no matching entity found in clientEntityMap.`
-      );
-      // Attempt to remove Colyseus state just in case it exists
-      if (this.state?.players.has(clientId)) {
-        console.warn(
-          `[MyRoom] Removing potentially orphaned player state for ${clientId}.`
-        );
-        this.state.players.delete(clientId);
-      }
-      return; // No entity to clean up further
+    const cId = client.sessionId;
+    const eId = this.clientEntityMap.get(cId);
+    console.log(`[Leave] ${cId} (eid: ${eId}) left.`);
+    if (eId !== undefined) {
+      this.clientEntityMap.delete(cId);
+      this.cleanupEntityResources(eId, cId);
     }
-
-    // Remove mapping immediately
-    this.clientEntityMap.delete(clientId);
-
-    // Call the cleanup helper function
-    this.cleanupEntityResources(entityId, clientId);
-
-    // Explicitly remove Colyseus state here as well (exitQuery might run later)
-    if (this.state?.players.has(clientId)) {
-      console.log(
-        `[Colyseus State] Removing player state for ${clientId} during onLeave.`
-      );
-      this.state.players.delete(clientId);
+    if (this.state?.players.has(cId)) {
+      this.state.players.delete(cId);
     }
   }
-
   onDispose(): void {
-    console.log("[MyRoom] Room disposing. Cleaning up world resources...");
-    // Clear maps
+    console.log("[Dispose] Cleaning up...");
     this.clientEntityMap.clear();
     this.eidToRapierBodyMap.clear();
-
-    // Optional: Free Rapier world resources if necessary/available
-    // if (this.rapierWorld && typeof (this.rapierWorld as any).free === 'function') {
-    //     (this.rapierWorld as any).free();
-    //     console.log("[MyRoom] Freed Rapier world resources.");
-    // }
-    // Clear references
-    (this.ecsWorld as any) = null; // Help GC by clearing references
+    (this.ecsWorld as any) = null;
     (this.rapierWorld as any) = null;
+    (this.worldGenerator as any) = null;
     (this.playerQuery as any) = null;
     (this.playerQueryEnter as any) = null;
     (this.playerQueryExit as any) = null;
-
-    console.log("[MyRoom] Room disposed.");
+    console.log("[Dispose] Complete.");
   }
-
-  // Helper to find clientId from entity ID
   private findClientIdByEid(eid: number): string | undefined {
-    for (const [clientId, entityId] of this.clientEntityMap.entries()) {
-      if (entityId === eid) {
-        return clientId;
-      }
+    for (const [cId, eId] of this.clientEntityMap.entries()) {
+      if (eId === eid) return cId;
     }
     return undefined;
   }

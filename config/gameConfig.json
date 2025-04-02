@@ -9,14 +9,14 @@
     "playerImpulseFactor": 0.2
   },
   "worldGen": {
-    "seed": "BountyfullDefault", // Or null to generate random
+    "seed": "BountyfullDefault",
     "terrainWidth": 50,
     "terrainHeight": 50,
-    "terrainSubdivisions": 20, // For client-side mesh detail
-    "heightScale": 5 // How much heightmap values affect actual Y
+    "terrainSubdivisions": 20,
+    "heightScale": 5
   },
   "gameplay": {
     "initialSpawnRadius": 10.0,
-     "dropShipLeaveTime": 600 // seconds (10 minutes)
+    "dropShipLeaveTime": 600
   }
 }
