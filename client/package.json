@@ -20,5 +20,8 @@
     "colyseus.js": "^0.16.15",
     "express": "^4.21.2",
     "simplex-noise": "^4.0.3"
+  },
+  "devDependencies": {
+    "@babylonjs/inspector": "^8.0.3"
   }
 }
