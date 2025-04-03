@@ -4,15 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bountyfull Game</title>
-    <!-- Link to the stylesheet -->
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <!-- Canvas element for Babylon.js rendering -->
     <canvas id="renderCanvas" touch-action="none"></canvas>
 
-    <!-- Script tag to load the bundled client code -->
-    <!-- Vite will inject the correct path during development or build -->
+    <!-- ***** ADDED DEBUG BUTTON ***** -->
+    <button
+      id="debugCamButton"
+      style="
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1001;
+        padding: 8px;
+      "
+    >
+      Debug Camera
+    </button>
+    <!-- ***** END DEBUG BUTTON ***** -->
+
     <script type="module" src="./src/client.ts"></script>
   </body>
 </html>

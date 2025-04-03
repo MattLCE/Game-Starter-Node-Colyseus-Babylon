@@ -10,13 +10,15 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
-import "@babylonjs/loaders/glTF";
-import "@babylonjs/core/Loading/Plugins/babylonFileLoader";
-import "@babylonjs/core/Meshes/Builders/groundBuilder"; // Ensure groundBuilder is imported
+import { VertexBuffer } from "@babylonjs/core/Buffers/buffer"; // Keep for logging
+import "@babylonjs/loaders/glTF"; // Keep even if duck not used now
+import "@babylonjs/core/Loading/Plugins/babylonFileLoader"; // Keep
+import "@babylonjs/core/Meshes/Builders/groundBuilder"; // Keep groundBuilder
+import "@babylonjs/core/Meshes/Builders/boxBuilder"; // Need boxBuilder
 
 import * as Colyseus from "colyseus.js";
 import { MyRoomState, PlayerState } from "../../server/src/myroom"; // Adjust path if needed
-import { createNoise2D, RandomFn } from "simplex-noise";
+import { createNoise2D, RandomFn } from "simplex-noise"; // Keep simplex
 
 // --- Helper: Simple Seeded PRNG (Mulberry32) ---
 function mulberry32(seedStr: string): RandomFn {
@@ -42,14 +44,13 @@ let client: Colyseus.Client;
 let room: Colyseus.Room<MyRoomState> | null = null;
 const playerMeshMap = new Map<string, Mesh>();
 let terrainMesh: Mesh | null = null;
-let placeholderPlayerMesh: Mesh | null = null;
+let placeholderPlayerMesh: Mesh | null = null; // Keep reference even if not used now
 const inputState = {
   left: false,
   right: false,
   forward: false,
   backward: false,
 };
-const noiseScaleFactor = 0.1; // Adjust noise scale as needed
 
 // --- Initialization ---
 function initializeApp() {
@@ -61,13 +62,16 @@ function initializeApp() {
   engine = new Engine(canvas, true);
   scene = new Scene(engine);
   scene.clearColor = new Color4(0.2, 0.3, 0.4, 1.0);
-  camera = new FreeCamera("camera1", new Vector3(0, 10, -15), scene);
+
+  camera = new FreeCamera("camera1", new Vector3(0, 25, -40), scene);
   camera.setTarget(new Vector3(0, 0, 0));
+  camera.minZ = 0.1; // Keep near clip adjustment
   camera.attachControl(canvas, true);
   camera.speed = 0.5;
-  camera.upperBetaLimit = Math.PI / 2 - 0.1; // Prevent looking straight down/up too much
+  camera.upperBetaLimit = Math.PI / 2 - 0.1;
   const light = new HemisphericLight("light1", new Vector3(0, 1, 0), scene);
   light.intensity = 0.8;
+
   engine.runRenderLoop(() => {
     if (scene) {
       scene.render();
@@ -76,8 +80,46 @@ function initializeApp() {
   window.addEventListener("resize", () => {
     engine.resize();
   });
+
+  // Debug Button Logic
+  const debugButton = document.getElementById("debugCamButton");
+  if (debugButton) {
+    console.log("[Debug] Found debug button element.");
+    debugButton.onclick = () => {
+      console.log("--- Debug button clicked! ---");
+      if (!engine) {
+        console.error("Debug: Engine is invalid!");
+        return;
+      }
+      if (!scene) {
+        console.error("Debug: Scene is invalid!");
+        return;
+      }
+      if (camera) {
+        console.log("--- Camera Debug Info ---");
+        console.log("Position (World):", camera.globalPosition);
+        console.log("Target (Approx World):", camera.getTarget());
+        console.log("Parent:", camera.parent ? camera.parent.name : "None");
+        if (camera.parent && camera.parent instanceof Mesh) {
+          console.log("Parent Position:", camera.parent.position);
+          console.log("Parent Visibility:", camera.parent.isVisible);
+          console.log("Parent Scaling:", camera.parent.scaling);
+        }
+        console.log("Up Vector:", camera.upVector);
+        console.log("Min Z (Near Clip):", camera.minZ);
+        console.log("Max Z (Far Clip):", camera.maxZ);
+        console.log("-------------------------");
+      } else {
+        console.log("Debug Button: Camera object is null/undefined.");
+      }
+    };
+    console.log("[Debug] Attached onclick handler to debug button.");
+  } else {
+    console.error("[Debug] Could not find debug button element!");
+  }
+
   setupInputListeners();
-  void loadPlaceholderAsset();
+  void loadPlaceholderAsset(); // Still load it, just don't use it for now
   initializeColyseus();
 }
 
@@ -87,14 +129,14 @@ async function loadPlaceholderAsset() {
     console.log("Loading placeholder player asset (rubberDuck.glb)...");
     const r = await SceneLoader.ImportMeshAsync(
       "",
-      "/assets/models/", // Ensure path is correct relative to 'public'
+      "/assets/models/",
       "rubberDuck.glb",
       scene
     );
     if (r.meshes.length > 0) {
       const m = r.meshes[0] as Mesh;
       m.name = "placeholderPlayerTemplate";
-      m.setEnabled(false); // Keep it disabled until cloned
+      m.setEnabled(false);
       placeholderPlayerMesh = m;
       console.log("Placeholder loaded.");
     } else {
@@ -106,212 +148,64 @@ async function loadPlaceholderAsset() {
   }
 }
 
-// --- Procedural Terrain Generation ---
+// --- Procedural Terrain Generation (SIMPLIFIED FOR DEBUGGING) ---
 function createOrUpdateTerrain(state: MyRoomState, scene: Scene) {
   if (terrainMesh) {
-    console.log("[Client WG] Disposing old terrain.");
+    console.log("[Client Debug] Disposing old terrain.");
     terrainMesh.dispose();
     terrainMesh = null;
   }
-
-  console.log("[Client WG] Received state for terrain:", {
-    seed: state.worldSeed,
-    width: state.terrainWidth,
-    height: state.terrainHeight,
-    subdivisions: state.terrainSubdivisions,
-    scale: state.heightScale,
-  });
-  const seed = state.worldSeed;
-  const terrainWidth = Number(state.terrainWidth);
-  const terrainHeight = Number(state.terrainHeight);
-  let terrainSubdivisions = Math.floor(Number(state.terrainSubdivisions));
-  const heightScale = Number(state.heightScale);
-
-  // --- Input Validation ---
-  if (
-    !seed ||
-    !terrainWidth ||
-    !terrainHeight ||
-    !terrainSubdivisions || // Check subdivisions here initially
-    !heightScale ||
-    isNaN(terrainWidth) ||
-    isNaN(terrainHeight) ||
-    isNaN(terrainSubdivisions) ||
-    isNaN(heightScale) ||
-    terrainWidth <= 0 ||
-    terrainHeight <= 0 ||
-    terrainSubdivisions <= 0 || // <= 0 is invalid
-    heightScale <= 0
-  ) {
-    console.error(
-      "[Client WG] Invalid terrain parameters received. Aborting.",
-      { seed, terrainWidth, terrainHeight, terrainSubdivisions, heightScale }
-    );
-    // Optional: Defaulting subdivisions to 1 only if it was the sole issue
-    if (terrainSubdivisions <= 0) {
-      console.warn("[Client WG] Subdivisions <= 0, defaulting to 1.");
-      terrainSubdivisions = 1; // Attempt recovery
-      // Re-validate *other* parameters after defaulting subdivision
-      if (
-        !seed ||
-        !terrainWidth ||
-        !terrainHeight ||
-        !heightScale ||
-        isNaN(terrainWidth) ||
-        isNaN(terrainHeight) ||
-        isNaN(heightScale) ||
-        terrainWidth <= 0 ||
-        terrainHeight <= 0 ||
-        heightScale <= 0
-      ) {
-        return; // Abort if other parameters are still invalid
-      }
-      // Continue if only subdivisions was bad and now fixed
-    } else {
-      return; // Abort if any *other* parameter was invalid
-    }
-  }
-  // --- End Input Validation ---
-
-  const points = terrainSubdivisions + 1; // Calculate points *once* here
-
-  console.log(`[Client WG] Generating terrain mesh using seed: ${seed}`);
-  const noise2D = createNoise2D(mulberry32(seed));
-  const heightMapJsArray: number[] = []; // Generate as standard JS array first
-
-  for (let j = 0; j < points; j++) {
-    for (let i = 0; i < points; i++) {
-      const x = (i / (points - 1)) * terrainWidth - terrainWidth / 2;
-      const z = (j / (points - 1)) * terrainHeight - terrainHeight / 2;
-      const nVal = noise2D(x * noiseScaleFactor, z * noiseScaleFactor);
-      // Normalize noise to 0-1 range, then scale
-      const h = ((nVal + 1) / 2) * heightScale;
-      heightMapJsArray.push(h);
-    }
-  }
-
-  // --- Data Validation ---
-  const expectedLength = points * points;
-  let dataIsValid = true;
-  if (heightMapJsArray.length !== expectedLength) {
-    console.error(
-      `[Client WG] Heightmap length mismatch! Expected ${expectedLength}, Got ${heightMapJsArray.length}.`
-    );
-    dataIsValid = false;
-  } else {
-    for (let k = 0; k < heightMapJsArray.length; k++) {
-      if (!Number.isFinite(heightMapJsArray[k])) {
-        console.error(
-          `[Client WG] Invalid value in heightMap at index ${k}: ${heightMapJsArray[k]}.`
-        );
-        dataIsValid = false;
-        break; // No need to check further
-      }
-    }
-  }
-  if (!dataIsValid) {
-    console.error(
-      "[Client WG] Heightmap validation failed. Aborting terrain creation."
-    );
-    return; // Stop if data is bad
-  }
-  // --- End Data Validation ---
-
-  // Convert to Float32Array *after* validation
-  const heightMapFloat32 = new Float32Array(heightMapJsArray);
-  console.log(
-    `[Client WG] Converted heightmap to Float32Array (length: ${heightMapFloat32.length})`
-  );
-
-  // --- Create Mesh ---
-  // ***** MODIFIED: Add buffer, bufferWidth, bufferHeight to options *****
-  const groundOptions = {
-    width: terrainWidth,
-    height: terrainHeight,
-    subdivisions: terrainSubdivisions,
-    minHeight: 0, // Minimum height from your generated data (can be adjusted)
-    maxHeight: heightScale, // Maximum height from your generated data
-    updatable: false, // Set to true if you plan to update the heightmap later
-    // --- These three tell Babylon to use your Float32Array ---
-    buffer: heightMapFloat32, // The raw height data
-    bufferWidth: points, // Width of the data grid (subdivisions + 1)
-    bufferHeight: points, // Height of the data grid (subdivisions + 1)
-  };
-  console.log(
-    "[Client WG] Calling CreateGroundFromHeightMap with options:",
-    groundOptions // Log the complete options object being passed
-  );
+  console.log("[Client Debug] Creating simple flat ground...");
   try {
-    // Log data just before the call for easier debugging
-    console.log(
-      "[Client WG] heightMapFloat32 length:",
-      heightMapFloat32.length
-    );
-    console.log(
-      "[Client WG] heightMapFloat32 type:",
-      heightMapFloat32.constructor.name
-    );
-    console.log(
-      "[Client WG] Expected buffer size based on points:",
-      points * points
-    );
-
-    // ***** MODIFIED: Pass empty string for URL, options contain buffer *****
-    terrainMesh = MeshBuilder.CreateGroundFromHeightMap(
-      "terrain",
-      "", // Pass an empty string as the URL when using buffer
-      groundOptions, // Pass the options object containing the buffer info
+    terrainMesh = MeshBuilder.CreateGround(
+      "debugGround",
+      {
+        width: state.terrainWidth || 50,
+        height: state.terrainHeight || 50,
+        subdivisions: 4,
+      },
       scene
     );
-  } catch (meshError) {
-    console.error(
-      "[Client WG] Error during CreateGroundFromHeightMap:",
-      meshError // Log the specific error
-    );
-    // Log arguments again if error persists, helps confirm what was passed
-    // console.error("Arguments passed:", "terrain", "", groundOptions, scene);
-    // console.error("Buffer details:", heightMapFloat32.length, points);
-    return; // Stop execution if mesh creation fails
+    if (!terrainMesh) {
+      console.error(
+        "[Client Debug] MeshBuilder.CreateGround returned null/undefined!"
+      );
+      return;
+    }
+    terrainMesh.position = new Vector3(0, 0, 0);
+    const mat = new StandardMaterial("debugGroundMat", scene);
+    mat.diffuseColor = new Color3(0.5, 0.7, 0.5);
+    mat.specularColor = new Color3(0.1, 0.1, 0.1);
+    terrainMesh.material = mat;
+    terrainMesh.receiveShadows = true;
+    console.log("[Client Debug] Simple flat ground created successfully.");
+    console.log("[Client Debug] Ground position:", terrainMesh.position);
+    try {
+      const vertexCount =
+        terrainMesh.getVerticesData(VertexBuffer.PositionKind)?.length / 3;
+      console.log("[Client Debug] Ground vertex count:", vertexCount);
+    } catch (e) {
+      console.error("[Client Debug] Error getting ground vertex count:", e);
+    }
+  } catch (error) {
+    console.error("[Client Debug] Error creating simple ground:", error);
   }
-  // --- End Create Mesh ---
-
-  // --- Apply Material ---
-  const mat = new StandardMaterial("terrainMat", scene);
-  try {
-    // Ensure texture path is correct relative to 'public' folder
-    const tex = new Texture("/assets/textures/grass.jpg", scene);
-    tex.uScale = terrainWidth / 4; // Adjust texture tiling as needed
-    tex.vScale = terrainHeight / 4;
-    mat.diffuseTexture = tex;
-  } catch (e) {
-    console.error("Failed loading grass texture:", e);
-    mat.diffuseColor = new Color3(0.3, 0.6, 0.3); // Fallback green color
-  }
-  terrainMesh.material = mat;
-  terrainMesh.receiveShadows = true; // Enable shadow receiving if needed
-  console.log("[Client WG] Terrain mesh created successfully.");
-  // --- End Apply Material ---
 }
 
 // --- Colyseus Connection ---
 function initializeColyseus() {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const host = window.location.hostname;
-  // Use the correct port if running locally and Vite uses a different one
-  // const port = window.location.port ? `:${window.location.port}` : ""; // Use this if connecting to Vite proxy
   const port = window.location.port
     ? `:${window.location.port}`
     : proto === "wss"
       ? ":443"
-      : ":80"; // Use standard ports or current if specified (likely Replit uses std ports)
-  // Construct the endpoint - Adjust if your server path is different
-  const endpoint = `${proto}://${host}${port}`; // Replit usually maps external port 80/443 to internal 2567
-  // const endpoint = `${proto}://${host}:2567`; // Explicit port for local dev if NOT using Vite proxy
-
+      : ":80";
+  const endpoint = `${proto}://${host}${port}`;
   console.log(`[Colyseus] Connecting to: ${endpoint}`);
   try {
     client = new Colyseus.Client(endpoint);
-    void connectToRoom(); // Start connection attempt
+    void connectToRoom();
   } catch (e) {
     console.error("[Colyseus] Client initialization failed:", e);
     displayConnectionError("Failed to initialize connection client.");
@@ -321,16 +215,13 @@ function initializeColyseus() {
 async function connectToRoom() {
   try {
     console.log("[Colyseus] Joining 'my_room'...");
-    // Add any options needed for joinOrCreate if your room uses them
-    room = await client.joinOrCreate<MyRoomState>("my_room", {
-      /* options */
-    });
+    room = await client.joinOrCreate<MyRoomState>("my_room", {});
     console.log(`[Colyseus] Joined! Session ID: ${room.sessionId}`);
-    console.log("[Colyseus] Initial state:", room.state.toJSON()); // Log initial state from server
+    console.log("[Colyseus] Initial state:", room.state.toJSON());
     setupRoomListeners();
   } catch (e) {
     console.error("[Colyseus] Join failed:", e);
-    displayConnectionError(e); // Show error to user
+    displayConnectionError(e);
   }
 }
 
@@ -338,127 +229,135 @@ function setupRoomListeners() {
   if (!room) return;
   console.log("[Colyseus] Setting up listeners...");
 
-  let isFirstState = true; // Flag to generate terrain only on first state received
+  let isFirstState = true;
 
-  // Listen for state changes
   room.onStateChange((state: MyRoomState) => {
-    // console.log("[Colyseus] State update received:", state.toJSON()); // Debug log
+    console.log(
+      "[Colyseus] State update received. Player count:",
+      state.players.size
+    );
 
-    // Generate terrain only on the first valid state change
     if (isFirstState && state.worldSeed !== "default") {
-      // Check for valid seed
+      console.log(
+        "[Client Debug] First state change, attempting terrain creation..."
+      );
       try {
         createOrUpdateTerrain(state, scene);
-        isFirstState = false; // Terrain created, don't run again
+        isFirstState = false;
       } catch (terrainError) {
         console.error(
-          "[Client] Error processing initial state for terrain:",
+          "[Client Debug] Error processing initial state for terrain:",
           terrainError
         );
-        // Potentially disconnect or show an error if terrain fails
       }
     }
 
-    // Sync player positions
     const serverIds = new Set(state.players.keys());
+    console.log("[Sync] Server Player IDs:", Array.from(serverIds));
+    console.log(
+      "[Sync] Local Player IDs in Map:",
+      Array.from(playerMeshMap.keys())
+    );
 
     state.players.forEach((playerState: PlayerState, sessionId) => {
+      console.log(`[Sync] Processing player: ${sessionId}`);
       let mesh = playerMeshMap.get(sessionId);
 
-      // Add new player meshes
       if (!mesh) {
-        if (placeholderPlayerMesh) {
-          // Check if the placeholder is loaded
-          mesh =
-            placeholderPlayerMesh.clone(`player_${sessionId}`, null, true) ??
-            undefined;
-          if (mesh) {
-            mesh.setEnabled(true); // Make the clone visible
-            mesh.position = new Vector3(
-              playerState.x,
-              playerState.y,
-              playerState.z
-            );
-            playerMeshMap.set(sessionId, mesh);
-            console.log(`[Sync] Added mesh for ${sessionId}`);
+        console.log(
+          `[Sync] No mesh found for ${sessionId}. Creating debug box instead.`
+        );
 
-            // Attach camera to the local player's mesh
+        // ***** REPLACE DUCK CLONE WITH DEBUG BOX *****
+        try {
+          // Create a simple box instead
+          mesh = MeshBuilder.CreateBox(
+            `player_${sessionId}_box`,
+            { size: 1.0 },
+            scene
+          ); // Use size 1 for visibility
+
+          if (mesh) {
+            const boxMat = new StandardMaterial(
+              `player_${sessionId}_mat`,
+              scene
+            );
+            boxMat.diffuseColor = Color3.Yellow(); // Bright color
+            mesh.material = boxMat;
+
+            mesh.setEnabled(true);
+            mesh.position = new Vector3(0, 5, 0); // Keep forced position
+            mesh.scaling = new Vector3(1, 1, 1); // Ensure correct scaling
+
+            console.log(
+              `[Sync] Created DEBUG BOX for ${sessionId} at forced pos:`,
+              mesh.position
+            );
+            console.log(`[Sync] Box ${sessionId} visibility:`, mesh.isVisible);
+            console.log(`[Sync] Box ${sessionId} scaling:`, mesh.scaling);
+            playerMeshMap.set(sessionId, mesh);
+            console.log(`[Sync] Added debug box mesh for ${sessionId}`);
+
+            // Keep camera parenting disabled for now
             if (sessionId === room?.sessionId) {
-              console.log(`[Camera] Attaching to self: ${sessionId}`);
-              // Adjust camera relative position if needed
-              camera.position = new Vector3(0, 1.5, -5); // Example offset
-              camera.parent = mesh;
+              console.log(
+                `[Camera] NOT attaching camera to self (${sessionId}) for debug.`
+              );
             }
           } else {
-            console.error(
-              `[Sync] Failed to clone placeholder mesh for ${sessionId}`
-            );
+            console.error(`[Sync] Failed to create debug box for ${sessionId}`);
           }
-        } else {
-          // console.warn(`[Sync] Placeholder not loaded yet, cannot create mesh for ${sessionId}`); // Placeholder might not be ready
-          return; // Skip if placeholder isn't loaded
+        } catch (boxError) {
+          console.error(
+            `[Sync] Error creating debug box for ${sessionId}:`,
+            boxError
+          );
+          return; // Stop processing this player if box creation fails
         }
-      }
+        // ***** END REPLACEMENT *****
+      } // End of !mesh block
 
-      // Update existing player meshes (except the local player, whose position is driven by physics/camera parent)
+      // Keep updating remote players if needed (less relevant now)
       if (mesh && sessionId !== room?.sessionId) {
-        // Optional: Add smoothing/interpolation here later
-        mesh.position.set(playerState.x, playerState.y, playerState.z);
+        // Update position based on state if required
+        // mesh.position.set(playerState.x, playerState.y, playerState.z);
       }
     });
 
-    // Remove meshes for players who left
+    // Player removal logic remains the same
     playerMeshMap.forEach((mesh, sessionId) => {
       if (!serverIds.has(sessionId)) {
         console.log(`[Sync] Removing mesh for ${sessionId}`);
-        if (camera.parent === mesh) {
-          // Detach camera if parent is leaving
-          camera.parent = null;
-          console.log(`[Camera] Detached from leaving player ${sessionId}`);
-          // Consider resetting camera position/target here if needed
-          camera.position = new Vector3(0, 10, -15); // Reset to default
-          camera.setTarget(Vector3.Zero());
-        }
         mesh.dispose();
         playerMeshMap.delete(sessionId);
       }
     });
   });
 
-  // Listen for errors
   room.onError((code, message) => {
     console.error(`[Colyseus] Error (${code}): ${message}`);
     displayConnectionError(`Server error: ${message || code}`);
   });
-
-  // Listen for leave events
   room.onLeave((code) => {
     console.log(`[Colyseus] Left the room (code: ${code})`);
-    room = null; // Clear the room reference
-    // Clean up scene resources
+    room = null;
     playerMeshMap.forEach((mesh) => mesh.dispose());
     playerMeshMap.clear();
     if (terrainMesh) terrainMesh.dispose();
     terrainMesh = null;
-    if (camera) camera.parent = null; // Detach camera
-    // Consider resetting camera position
-    camera.position = new Vector3(0, 10, -15);
-    camera.setTarget(Vector3.Zero());
-
+    if (camera) camera.parent = null; // Ensure camera parent is cleared on leave
+    camera.position = new Vector3(0, 25, -40);
+    camera.setTarget(Vector3.Zero()); // Reset camera
     displayConnectionError(`Disconnected (code: ${code}). Please refresh.`);
-    // Potentially attempt reconnection or prompt user
   });
 
-  // Start sending input periodically
-  setInterval(sendInput, 50); // Send input roughly 20 times/sec
-
+  setInterval(sendInput, 50);
   console.log("[Colyseus] Listeners attached.");
 }
 
 // --- Input Handling ---
 function setupInputListeners() {
   window.addEventListener("keydown", (e) => {
-    // Use switch for clarity and potential future keys
     switch (e.key.toLowerCase()) {
       case "w":
         inputState.forward = true;
@@ -474,7 +373,6 @@ function setupInputListeners() {
         break;
     }
   });
-
   window.addEventListener("keyup", (e) => {
     switch (e.key.toLowerCase()) {
       case "w":
@@ -494,7 +392,6 @@ function setupInputListeners() {
 }
 
 function sendInput() {
-  // Only send if connected to a room
   if (room?.connection.isOpen) {
     room.send("input", inputState);
   }
@@ -503,13 +400,11 @@ function sendInput() {
 // --- Error Display ---
 function displayConnectionError(error: any) {
   const msg = error instanceof Error ? error.message : String(error);
-  console.error("Connection Error:", msg); // Log the raw error
-
+  console.error("Connection Error:", msg);
   let errorDiv = document.getElementById("connectionError");
   if (!errorDiv) {
     errorDiv = document.createElement("div");
     errorDiv.id = "connectionError";
-    // Basic styling
     errorDiv.style.position = "absolute";
     errorDiv.style.top = "10px";
     errorDiv.style.left = "10px";
@@ -523,11 +418,9 @@ function displayConnectionError(error: any) {
     errorDiv.style.fontSize = "14px";
     document.body.appendChild(errorDiv);
   }
-  // Display a user-friendly message
   errorDiv.textContent = `Connection Issue: ${msg}. Try refreshing the page.`;
-  errorDiv.style.display = "block"; // Make sure it's visible
+  errorDiv.style.display = "block";
 }
 
 // --- Start ---
-// Wait for the DOM to be fully loaded before initializing
 document.addEventListener("DOMContentLoaded", initializeApp);
