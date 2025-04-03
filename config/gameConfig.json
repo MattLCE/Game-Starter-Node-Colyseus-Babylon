@@ -13,7 +13,7 @@
     "terrainWidth": 50,
     "terrainHeight": 50,
     "terrainSubdivisions": 20,
-    "heightScale": 5
+    "heightScale": 20
   },
   "gameplay": {
     "initialSpawnRadius": 10.0,
