@@ -15,6 +15,8 @@ export default defineConfig({
     //     ws: true,
     //   },
     // }
+    host: true,
+    allowedHosts: ['d4e574b9-9344-4be3-849a-a850200dfcf8-00-nydpw152d1hz.worf.replit.dev'],
   },
   // Define build options
   build: {

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eriscape Prototype</title>
+    <style>
+      /* Basic styling */
+      html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background-color: #222; font-family: sans-serif;}
+      #renderCanvas { width: 800px; height: 800px; display: block; margin: 20px auto; border: 1px solid #555; }
+      #controls { text-align: center; margin-top: 10px; color: white; }
+      #timeLabel { margin-top: 5px; }
+    </style>
+  </head>
+  <body>
+    <!-- Canvas for Babylon.js -->
+    <canvas id="renderCanvas"></canvas>
+
+    <!-- UI Controls defined in HTML -->
+    <div id="controls">
+      <input type="range" id="timeSlider" min="0" max="18000" value="0" style="width: 800px;">
+      <div id="timeLabel">Time: 0 / 18000</div>
+    </div>
+
+    <!-- Load the TypeScript module -->
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

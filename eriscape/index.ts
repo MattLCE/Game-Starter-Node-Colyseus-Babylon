@@ -11,9 +11,27 @@ import {
   Vector3,
   DynamicTexture,
   Tools,
+  Scalar,
 } from "@babylonjs/core";
 import "@babylonjs/core/Materials/Textures/texture"; // Ensure textures are loaded
-import SimplexNoise from "simplex-noise";
+// import { createNoise2D, RandomFn } from "simplex-noise";
+import { createNoise2D, type RandomFn } from "simplex-noise";
+
+// -- Helper: Simple Seeded PRNG (Mulberry32) --
+function mulberry32(seedStr: string): RandomFn {
+  let h = 1779033703 ^ seedStr.length;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // ----------------------------------------
 // Data Model Definitions
@@ -87,7 +105,7 @@ function generateHeightMap(
   env: EnvironmentMap,
   noiseScale: number,
   maxElevation: number,
-  simplex: SimplexNoise
+  simplex: createNoise2D
 ): void {
   const { width, height, resolution, cells } = env;
   for (let j = 0; j < resolution; j++) {
@@ -99,7 +117,7 @@ function generateHeightMap(
       const x = u * width;
       const y = v * height;
       // Get a noise value in [-1, 1]
-      const n = simplex.noise2D(x * noiseScale, y * noiseScale);
+      const n = simplex(x * noiseScale, y * noiseScale); // Call the noise function directly
       // Normalize to [0, 1] and scale to maxElevation
       const elevation = ((n + 1) / 2) * maxElevation;
       cells[j][i].elevation = elevation;
@@ -158,7 +176,7 @@ function createMapTexture(env: EnvironmentMap, safeZoneAtTick: { x: number; y: n
     for (let i = 0; i < env.resolution; i++) {
       const cell = env.cells[j][i];
       // Map elevation to a grayscale value
-      const intensity = Tools.Clamp(cell.elevation / 20, 0, 1);
+      const intensity = Scalar.Clamp(cell.elevation / 20, 0, 1);
       const colorVal = Math.floor(intensity * 255);
       // Optionally, tint by condition
       let fillStyle = `rgb(${colorVal},${colorVal},${colorVal})`;
@@ -226,7 +244,7 @@ const MAX_ELEVATION = 20;
 const TFINAL = 18000;           // 5 minutes at 60 Hz
 
 // Create a SimplexNoise generator.
-const simplex = new SimplexNoise("eriscape");
+const simplex = createNoise2D(mulberry32("eriscape"));
 
 // Initialize environment map.
 const envMap = initializeEnvironmentMap(MAP_WIDTH, MAP_HEIGHT, RESOLUTION, BIOME);
@@ -235,24 +253,15 @@ const envMap = initializeEnvironmentMap(MAP_WIDTH, MAP_HEIGHT, RESOLUTION, BIOME
 generateHeightMap(envMap, NOISE_SCALE, MAX_ELEVATION, simplex);
 assignSurfaceConditions(envMap);
 
-// Set up HTML UI elements.
-const canvas = document.createElement("canvas");
-canvas.id = "renderCanvas";
-canvas.style.width = "800px";
-canvas.style.height = "800px";
-document.body.appendChild(canvas);
+// Get HTML UI elements defined in index.html
+const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
+const timeSlider = document.getElementById("timeSlider") as HTMLInputElement;
+const timeLabel = document.getElementById("timeLabel") as HTMLDivElement;
 
-const timeSlider = document.createElement("input");
-timeSlider.type = "range";
-timeSlider.min = "0";
-timeSlider.max = TFINAL.toString();
-timeSlider.value = "0";
-timeSlider.style.width = "800px";
-document.body.appendChild(timeSlider);
-
-const timeLabel = document.createElement("div");
-timeLabel.innerText = "Time: 0 / " + TFINAL;
-document.body.appendChild(timeLabel);
+if (!canvas || !timeSlider || !timeLabel) {
+  console.error("Required HTML elements (renderCanvas, timeSlider, timeLabel) not found in the DOM!");
+  throw new Error("Missing required HTML elements for Eriscape prototype.");
+}
 
 // Create Babylon engine and scene.
 engine = new Engine(canvas, true);
