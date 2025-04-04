@@ -3,23 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Eriscape Prototype</title>
+    <title>Eriscape Configurator</title>
     <style>
-      /* Basic styling */
-      html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background-color: #222; font-family: sans-serif;}
-      #renderCanvas { width: 800px; height: 800px; display: block; margin: 20px auto; border: 1px solid #555; }
-      #controls { text-align: center; margin-top: 10px; color: white; }
+      html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background-color: #282c34; color: #abb2bf; font-family: sans-serif; display: flex; flex-direction: column; align-items: center;}
+      #main-container { display: flex; flex-direction: row; align-items: flex-start; padding: 20px; gap: 20px; width: 100%; justify-content: center; }
+      #config-panel { background-color: #353a45; padding: 15px; border-radius: 5px; display: flex; flex-direction: column; gap: 10px; width: 250px; border: 1px solid #4b5162; }
+      #visualization { display: flex; flex-direction: column; align-items: center; }
+      #renderCanvas { width: 600px; height: 600px; display: block; border: 1px solid #4b5162; background-color: #1e1e1e; }
+      #time-controls { text-align: center; margin-top: 10px; color: white; background-color: #353a45; padding: 10px; border-radius: 5px; width: 600px; box-sizing: border-box; border: 1px solid #4b5162;}
       #timeLabel { margin-top: 5px; }
+      label { display: block; margin-bottom: 2px; font-size: 0.9em; }
+      input[type="number"], input[type="text"] { width: 95%; padding: 5px; background-color: #21252b; border: 1px solid #4b5162; color: #abb2bf; border-radius: 3px; margin-bottom: 8px; }
+      input[type="range"] { width: 100%; }
+      button { padding: 8px 15px; background-color: #61afef; border: none; color: #282c34; border-radius: 3px; cursor: pointer; font-weight: bold; margin-top: 5px;}
+      button:hover { background-color: #5299d8; }
+      h3 { margin-top: 0; border-bottom: 1px solid #4b5162; padding-bottom: 5px;}
+      .button-group { display: flex; justify-content: space-between; margin-top: 10px;}
     </style>
   </head>
   <body>
-    <!-- Canvas for Babylon.js -->
-    <canvas id="renderCanvas"></canvas>
+    <div id="main-container">
+      <div id="config-panel">
+        <h3>Configuration</h3>
 
-    <!-- UI Controls defined in HTML -->
-    <div id="controls">
-      <input type="range" id="timeSlider" min="0" max="18000" value="0" style="width: 800px;">
-      <div id="timeLabel">Time: 0 / 18000</div>
+        <div>
+          <label for="config-seed">Seed:</label>
+          <input type="text" id="config-seed" value="eriscape">
+        </div>
+
+        <div>
+          <label for="config-width">Map Width:</label>
+          <input type="number" id="config-width" value="100" min="10" step="10">
+        </div>
+
+        <div>
+          <label for="config-height">Map Height:</label>
+          <input type="number" id="config-height" value="100" min="10" step="10">
+        </div>
+
+        <div>
+          <label for="config-resolution">Resolution (Grid Size):</label>
+          <input type="number" id="config-resolution" value="200" min="10" max="1024" step="10">
+        </div>
+
+        <div>
+          <label for="config-noiseScale">Noise Scale:</label>
+          <input type="number" id="config-noiseScale" value="0.05" min="0.001" step="0.01">
+        </div>
+
+        <div>
+          <label for="config-maxElevation">Max Elevation:</label>
+          <input type="number" id="config-maxElevation" value="20" min="1" step="1">
+        </div>
+
+        <!-- Add Biome dropdown later if needed -->
+
+        <div class="button-group">
+          <button id="btn-regenerate">Regenerate</button>
+          <button id="btn-save">Save Config</button>
+        </div>
+         <div id="status-message" style="margin-top: 10px; font-size: 0.8em; text-align: center;"></div>
+      </div>
+
+      <div id="visualization">
+        <canvas id="renderCanvas"></canvas>
+        <div id="time-controls">
+          <input type="range" id="timeSlider" min="0" max="18000" value="0">
+          <div id="timeLabel">Time: 0 / 18000</div>
+        </div>
+      </div>
     </div>
 
     <!-- Load the TypeScript module -->

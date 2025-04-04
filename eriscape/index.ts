@@ -13,9 +13,45 @@ import {
   Tools,
   Scalar,
 } from "@babylonjs/core";
-import "@babylonjs/core/Materials/Textures/texture"; // Ensure textures are loaded
-// import { createNoise2D, RandomFn } from "simplex-noise";
+import "@babylonjs/core/Debug/debugLayer";
+import "@babylonjs/inspector";
+import "@babylonjs/core/Materials/Textures/texture";
 import { createNoise2D, type RandomFn } from "simplex-noise";
+
+// ----------------------------------------
+// Data Model Definitions
+// ----------------------------------------
+
+type BiomeType = "plains" | "forest" | "swamp" | "tundra" | "tropical";
+type SurfaceCondition = "dirt" | "rock" | "mud";
+
+interface MapCell {
+  elevation: number;
+  condition: SurfaceCondition;
+  hazardLevel: number;
+}
+
+interface EnvironmentEvent {
+  id: string;
+  type: "solarRadiation" | "lavaFlow" | "acidRain";
+  startTime: number;
+  duration: number;
+  area: { x: number; y: number; width: number; height: number };
+  intensity: number;
+}
+
+interface EnvironmentMap {
+  width: number;
+  height: number;
+  resolution: number;
+  biome: BiomeType;
+  cells: MapCell[][];
+  safeZone: {
+    start: { x: number; y: number; radius: number };
+    end: { x: number; y: number; radius: number };
+  };
+  events: EnvironmentEvent[];
+}
 
 // -- Helper: Simple Seeded PRNG (Mulberry32) --
 function mulberry32(seedStr: string): RandomFn {
@@ -34,49 +70,9 @@ function mulberry32(seedStr: string): RandomFn {
 }
 
 // ----------------------------------------
-// Data Model Definitions
-// ----------------------------------------
-
-// The overall map (or "biome") type – e.g. "plains".
-type BiomeType = "plains" | "forest" | "swamp" | "tundra" | "tropical";
-
-// Each grid cell stores its surface condition and elevation.
-type SurfaceCondition = "dirt" | "rock" | "mud";
-
-interface MapCell {
-  elevation: number;          // Base elevation (in game units)
-  condition: SurfaceCondition;// For now, set by a simple rule
-  hazardLevel: number;        // For later: 0 (safe) to 1 (deadly)
-}
-
-interface EnvironmentEvent {
-  // Placeholder: later events like lava flows, acid rain, etc.
-  id: string;
-  type: "solarRadiation" | "lavaFlow" | "acidRain";
-  startTime: number;
-  duration: number;
-  area: { x: number; y: number; width: number; height: number };
-  intensity: number;
-}
-
-interface EnvironmentMap {
-  width: number;              // Total width (game units)
-  height: number;             // Total height (game units)
-  resolution: number;         // Number of cells per side (grid resolution)
-  biome: BiomeType;           // Dominant biome for the map
-  cells: MapCell[][];         // 2D array of grid cells
-  safeZone: {
-    start: { x: number; y: number; radius: number };  // Safe zone at t=0 (covers map)
-    end: { x: number; y: number; radius: number };    // Safe zone at final tick (zero radius)
-  };
-  events: EnvironmentEvent[]; // Dynamic events (for later)
-}
-
-// ----------------------------------------
 // Generation Functions
 // ----------------------------------------
 
-// Create an empty grid of cells.
 function initializeEnvironmentMap(
   width: number,
   height: number,
@@ -91,48 +87,40 @@ function initializeEnvironmentMap(
     }
     cells.push(row);
   }
-  // Define the safe zone as a circle: at time 0 it covers the whole map; at tFinal it shrinks to the center.
+  // ***** MODIFICATION: Smaller starting radius for testing *****
   const safeZone = {
-    start: { x: width / 2, y: height / 2, radius: Math.max(width, height) },
+    start: { x: width / 2, y: height / 2, radius: width * 0.4 }, // Start at 40% of width
     end: { x: width / 2, y: height / 2, radius: 0 },
   };
-
   return { width, height, resolution, biome, cells, safeZone, events: [] };
 }
 
-// Generate base elevation values using simplex noise.
 function generateHeightMap(
   env: EnvironmentMap,
   noiseScale: number,
   maxElevation: number,
-  simplex: createNoise2D
+  noiseFunc: (x: number, y: number) => number
 ): void {
   const { width, height, resolution, cells } = env;
   for (let j = 0; j < resolution; j++) {
     for (let i = 0; i < resolution; i++) {
-      // Normalize cell indices to [0, 1]
       const u = i / (resolution - 1);
       const v = j / (resolution - 1);
-      // Map to world coordinates
       const x = u * width;
       const y = v * height;
-      // Get a noise value in [-1, 1]
-      const n = simplex(x * noiseScale, y * noiseScale); // Call the noise function directly
-      // Normalize to [0, 1] and scale to maxElevation
+      const n = noiseFunc(x * noiseScale, y * noiseScale);
       const elevation = ((n + 1) / 2) * maxElevation;
       cells[j][i].elevation = elevation;
     }
   }
 }
 
-// Assign surface conditions based on elevation. For example, low areas may be "mud" and high areas "rock".
 function assignSurfaceConditions(env: EnvironmentMap): void {
   const { cells } = env;
   const resolution = cells.length;
   for (let j = 0; j < resolution; j++) {
     for (let i = 0; i < resolution; i++) {
       const elevation = cells[j][i].elevation;
-      // Simple rule: if elevation < 6 -> mud, 6-12 -> dirt, >12 -> rock.
       if (elevation < 6) {
         cells[j][i].condition = "mud";
       } else if (elevation < 12) {
@@ -144,13 +132,11 @@ function assignSurfaceConditions(env: EnvironmentMap): void {
   }
 }
 
-// Compute safe zone radius at a given time tick (0 to tFinal)
 function computeSafeZoneAtTime(
   env: EnvironmentMap,
   tick: number,
   tFinal: number
 ): { x: number; y: number; radius: number } {
-  // Linear interpolation between start and end.
   const start = env.safeZone.start;
   const end = env.safeZone.end;
   const ratio = Math.min(Math.max(tick / tFinal, 0), 1);
@@ -162,71 +148,89 @@ function computeSafeZoneAtTime(
 }
 
 // ----------------------------------------
-// Visualization Using Babylon.js in 3D Orthographic Mode
+// Visualization Using Babylon.js
 // ----------------------------------------
 
-// Create a 2D visualization of the environment map as a DynamicTexture.
-function createMapTexture(env: EnvironmentMap, safeZoneAtTick: { x: number; y: number; radius: number }): DynamicTexture {
-  // Create a canvas texture whose size matches the grid resolution.
-  const dt = new DynamicTexture("mapTexture", { width: env.resolution, height: env.resolution }, scene, false);
-  const ctx = dt.getContext();
+let mapTexture: DynamicTexture | null = null;
 
-  // Draw each cell: use a color scale based on elevation.
-  for (let j = 0; j < env.resolution; j++) {
-    for (let i = 0; i < env.resolution; i++) {
-      const cell = env.cells[j][i];
-      // Map elevation to a grayscale value
-      const intensity = Scalar.Clamp(cell.elevation / 20, 0, 1);
-      const colorVal = Math.floor(intensity * 255);
-      // Optionally, tint by condition
-      let fillStyle = `rgb(${colorVal},${colorVal},${colorVal})`;
-      if (cell.condition === "mud") fillStyle = `rgb(${colorVal / 2},${colorVal / 2},${colorVal / 2})`;
-      if (cell.condition === "rock") fillStyle = `rgb(${colorVal + 50},${colorVal + 50},${colorVal + 50})`;
-
-      ctx.fillStyle = fillStyle;
-      ctx.fillRect(i, env.resolution - 1 - j, 1, 1); // Flip vertically
+function updateMapTexture(env: EnvironmentMap, safeZoneAtTick: { x: number; y: number; radius: number }, scene: Scene): void {
+    if (!mapTexture) {
+         mapTexture = new DynamicTexture("mapTexture", { width: env.resolution, height: env.resolution }, scene, false);
+         console.log("[Eriscape] Created Dynamic Texture");
     }
-  }
+    const ctx = mapTexture.getContext();
 
-  // Draw the safe zone (as a circle) in a contrasting color.
-  ctx.strokeStyle = "red";
-  ctx.lineWidth = 2;
-  // Convert safeZone center and radius from world coordinates to grid indices.
-  const sx = (safeZoneAtTick.x / env.width) * env.resolution;
-  const sy = (safeZoneAtTick.y / env.height) * env.resolution;
-  const sr = (safeZoneAtTick.radius / env.width) * env.resolution;
-  ctx.beginPath();
-  ctx.arc(sx, env.resolution - sy, sr, 0, 2 * Math.PI);
-  ctx.stroke();
+    // Draw cells
+    for (let j = 0; j < env.resolution; j++) {
+        for (let i = 0; i < env.resolution; i++) {
+            const cell = env.cells[j][i];
+            const intensity = Scalar.Clamp(cell.elevation / MAX_ELEVATION, 0, 1); // Use MAX_ELEVATION
+            const colorVal = Math.floor(intensity * 255);
+            let r = colorVal, g = colorVal, b = colorVal;
 
-  dt.update(); // Refresh the dynamic texture
+            if (cell.condition === "mud") { r = Math.floor(r*0.6); g = Math.floor(g*0.7); b = Math.floor(b*0.5); }
+            if (cell.condition === "rock") { r = Math.floor(r*1.1); g = Math.floor(g*1.1); b = Math.floor(b*1.1); }
 
-  return dt;
+            r = Math.min(255, Math.max(0, r));
+            g = Math.min(255, Math.max(0, g));
+            b = Math.min(255, Math.max(0, b));
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(i, env.resolution - 1 - j, 1, 1);
+        }
+    }
+
+    // Draw safe zone
+    ctx.strokeStyle = "red";
+    // ***** MODIFICATION: Increased line width *****
+    ctx.lineWidth = 2; // Make it slightly thicker
+
+    const normX = safeZoneAtTick.x / env.width;
+    const normY = safeZoneAtTick.y / env.height;
+    const sx = normX * env.resolution;
+    const sy = (1 - normY) * env.resolution;
+    const sr = (safeZoneAtTick.radius / env.width) * env.resolution;
+
+    console.log(`[Eriscape] Safe Zone (World): x=${safeZoneAtTick.x.toFixed(2)}, y=${safeZoneAtTick.y.toFixed(2)}, radius=${safeZoneAtTick.radius.toFixed(2)}`);
+    console.log(`[Eriscape] Safe Zone (Canvas Pixels): sx=${sx.toFixed(2)}, sy=${sy.toFixed(2)}, sr=${sr.toFixed(2)}`);
+
+    if (sr > 0 && isFinite(sx) && isFinite(sy)) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, sr, 0, 2 * Math.PI);
+        ctx.stroke();
+        console.log("[Eriscape] Drew safe zone arc.");
+    } else {
+        console.log("[Eriscape] Skipped drawing safe zone (radius <= 0 or invalid coords).");
+    }
+
+    mapTexture.update();
+    console.log("[Eriscape] Updated Dynamic Texture");
 }
 
-// Create an orthographic Babylon scene.
+
+// --- Shared Babylon Variables ---
 let engine: Engine;
 let scene: Scene;
+let envMap: EnvironmentMap;
 
 function createScene(canvas: HTMLCanvasElement): Scene {
+  engine = new Engine(canvas, true);
   scene = new Scene(engine);
-  // Set up an orthographic camera (top-down)
+  scene.clearColor = new Color3(0.1, 0.1, 0.2).toColor4();
+
   const camera = new FreeCamera("orthoCam", new Vector3(envMap.width / 2, 100, envMap.height / 2), scene);
   camera.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
-  const orthoLeft = -envMap.width / 2;
-  const orthoRight = envMap.width / 2;
-  const orthoTop = envMap.height / 2;
-  const orthoBottom = -envMap.height / 2;
-  camera.orthoLeft = orthoLeft;
-  camera.orthoRight = orthoRight;
-  camera.orthoTop = orthoTop;
-  camera.orthoBottom = orthoBottom;
+  const orthoSize = Math.max(envMap.width, envMap.height) / 2;
+  camera.orthoLeft = -orthoSize;
+  camera.orthoRight = orthoSize;
+  camera.orthoTop = orthoSize;
+  camera.orthoBottom = -orthoSize;
   camera.setTarget(new Vector3(envMap.width / 2, 0, envMap.height / 2));
+  camera.minZ = 0.1;
   camera.attachControl(canvas, true);
 
-  // Add a light.
   const light = new HemisphericLight("light", new Vector3(0, 1, 0), scene);
   light.intensity = 0.8;
+
   return scene;
 }
 
@@ -234,62 +238,69 @@ function createScene(canvas: HTMLCanvasElement): Scene {
 // Main Prototype Execution
 // ----------------------------------------
 
-// Parameters
 const MAP_WIDTH = 100;
 const MAP_HEIGHT = 100;
-const RESOLUTION = 200;         // 200 x 200 grid cells
+const RESOLUTION = 200;
 const BIOME: BiomeType = "plains";
 const NOISE_SCALE = 0.05;
 const MAX_ELEVATION = 20;
-const TFINAL = 18000;           // 5 minutes at 60 Hz
+const TFINAL = 18000;
 
-// Create a SimplexNoise generator.
-const simplex = createNoise2D(mulberry32("eriscape"));
-
-// Initialize environment map.
-const envMap = initializeEnvironmentMap(MAP_WIDTH, MAP_HEIGHT, RESOLUTION, BIOME);
-
-// Generate heightmap and assign surface conditions.
-generateHeightMap(envMap, NOISE_SCALE, MAX_ELEVATION, simplex);
+const noiseGenerator = createNoise2D(mulberry32("eriscape"));
+envMap = initializeEnvironmentMap(MAP_WIDTH, MAP_HEIGHT, RESOLUTION, BIOME);
+generateHeightMap(envMap, NOISE_SCALE, MAX_ELEVATION, noiseGenerator);
 assignSurfaceConditions(envMap);
 
-// Get HTML UI elements defined in index.html
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const timeSlider = document.getElementById("timeSlider") as HTMLInputElement;
 const timeLabel = document.getElementById("timeLabel") as HTMLDivElement;
 
 if (!canvas || !timeSlider || !timeLabel) {
-  console.error("Required HTML elements (renderCanvas, timeSlider, timeLabel) not found in the DOM!");
-  throw new Error("Missing required HTML elements for Eriscape prototype.");
+  console.error("Required HTML elements not found!");
+  throw new Error("Missing required HTML elements.");
 }
 
-// Create Babylon engine and scene.
-engine = new Engine(canvas, true);
 const babylonScene = createScene(canvas);
 
-// Create a plane to display our dynamic map texture.
 const plane = MeshBuilder.CreatePlane("mapPlane", { width: MAP_WIDTH, height: MAP_HEIGHT }, babylonScene);
+plane.rotation.x = Math.PI / 2;
 const mapMaterial = new StandardMaterial("mapMat", babylonScene);
-let currentSafeZone = computeSafeZoneAtTime(envMap, Number(timeSlider.value), TFINAL);
-const mapTexture = createMapTexture(envMap, currentSafeZone);
-mapMaterial.diffuseTexture = mapTexture;
+mapMaterial.backFaceCulling = false;
 plane.material = mapMaterial;
 plane.position = new Vector3(MAP_WIDTH / 2, 0, MAP_HEIGHT / 2);
 
-// Update loop: re-render texture when time slider changes.
+// Initialize and assign the dynamic texture
+let currentSafeZone = computeSafeZoneAtTime(envMap, Number(timeSlider.value), TFINAL);
+updateMapTexture(envMap, currentSafeZone, babylonScene);
+if (mapTexture) {
+    mapMaterial.diffuseTexture = mapTexture;
+    mapMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
+    mapMaterial.ambientColor = new Color3(0.8, 0.8, 0.8);
+}
+
+// Slider updates the texture
 timeSlider.addEventListener("input", () => {
   const tick = Number(timeSlider.value);
   timeLabel.innerText = "Time: " + tick + " / " + TFINAL;
-  // Compute current safe zone.
   currentSafeZone = computeSafeZoneAtTime(envMap, tick, TFINAL);
-  // Recreate the texture with updated safe zone.
-  createMapTexture(envMap, currentSafeZone);
+  updateMapTexture(envMap, currentSafeZone, babylonScene);
 });
 
-// Run the render loop.
+// Run the render loop
 engine.runRenderLoop(() => {
   babylonScene.render();
 });
 window.addEventListener("resize", () => {
   engine.resize();
+});
+
+// Inspector toggle
+window.addEventListener("keydown", (ev) => {
+    if (ev.shiftKey && ev.ctrlKey && ev.altKey && ev.key === 'I') {
+        if (babylonScene.debugLayer.isVisible()) {
+            babylonScene.debugLayer.hide();
+        } else {
+            babylonScene.debugLayer.show({ embedMode: true });
+        }
+    }
 });
