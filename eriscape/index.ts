@@ -1,4 +1,4 @@
-// Eriscape/index.ts - Interactive Configurator V2 (Typo Corrected Again)
+// Eriscape/index.ts - Interactive Configurator V2 (Safe Zone Shape Modified)
 
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, MeshBuilder,
@@ -27,8 +27,8 @@ interface EnvironmentMap {
   biome: BiomeType;
   cells: MapCell[][];
   safeZone: {
-    start: { x: number; y: number; radius: number };
-    end: { x: number; y: number; radius: number };
+    start: { x: number; y: number; radius: number }; // Radius here represents the *initial* extent
+    end: { x: number; y: number; radius: number };   // Radius here represents the *final* target circle radius
   };
   events: any[]; // Placeholder
 }
@@ -128,21 +128,21 @@ function mulberry32(seedStr: string): RandomFn {
   };
 }
 
+// Calculates the *target* circular safe zone properties at time t
 function computeSafeZoneAtTime(
   env: EnvironmentMap,
   t: number,
   tFinal: number
 ): { x: number; y: number; radius: number } {
-  // If you want a simple linear interpolation:
-  const fraction = tFinal === 0 ? 0 : t / tFinal; // avoid divide-by-zero
+  const fraction = tFinal === 0 ? 0 : Scalar.Clamp(t / tFinal, 0, 1); // Ensure fraction is between 0 and 1
   const { start, end } = env.safeZone;
 
-  // Interpolate X
-  const x = start.x + fraction * (end.x - start.x);
-  // Interpolate Y
-  const y = start.y + fraction * (end.y - start.y);
-  // Interpolate Radius
-  const radius = start.radius + fraction * (end.radius - start.radius);
+  // Interpolate Center X (linear)
+  const x = Scalar.Lerp(start.x, end.x, fraction);
+  // Interpolate Center Y (linear)
+  const y = Scalar.Lerp(start.y, end.y, fraction);
+  // Interpolate Target Radius (linear) - this radius defines the final circle size at time t
+  const radius = Scalar.Lerp(start.radius, end.radius, fraction);
 
   return { x, y, radius };
 }
@@ -164,6 +164,7 @@ function getRandomInRange(range: Range): number {
     if (range.min === range.max) return range.min;
     const min = Math.min(range.min, range.max);
     const max = Math.max(range.min, range.max);
+    // Use Math.random() which is okay for non-critical visualization randomness
     return min + Math.random() * (max - min);
 }
 
@@ -301,6 +302,8 @@ function loadPresetIntoUI(presetName: string) {
     inputMaxElevationMin.value = config.maxElevation.min.toString();
     inputMaxElevationMax.value = config.maxElevation.max.toString();
     timeSlider.max = config.tFinal.toString();
+    // Set initial slider value reasonably, e.g., 0 or last known value if available
+    timeSlider.value = "0"; // Start at time 0 when loading a preset
     timeLabel.textContent = `Time: ${timeSlider.value} / ${config.tFinal}`;
 
     currentPresetName = presetName;
@@ -312,9 +315,11 @@ function loadPresetIntoUI(presetName: string) {
 function handlePresetChange() {
     const selectedName = presetSelect.value;
     if (currentPresetName === "Custom") {
-        updatePresetFromUI("Custom");
+        updatePresetFromUI("Custom"); // Save custom changes before switching
     }
     loadPresetIntoUI(selectedName);
+    // Regenerate map when preset changes to reflect the new settings immediately
+    regenerateMap();
 }
 
 function handleRandomizeSeed() {
@@ -328,7 +333,7 @@ function handleCopyJson() {
          return;
     }
     const rangesConfig = allPresets["TemporaryCopyToClipboard"];
-    delete allPresets["TemporaryCopyToClipboard"];
+    delete allPresets["TemporaryCopyToClipboard"]; // Clean up temporary storage
 
      const jsonString = JSON.stringify(rangesConfig, null, 2);
 
@@ -343,9 +348,14 @@ function handleInputChange() {
         presetSelect.value = "Custom";
          showStatus("Switched to Custom preset due to modification.");
          if (!allPresets["Custom"]) {
-             allPresets["Custom"] = { ...DEFAULT_PRESETS["Default"], name: "Custom" };
+             // Create 'Custom' based on the *current* preset if it doesn't exist
+             const currentBaseName = presetSelect.options[presetSelect.selectedIndex].value;
+             const baseConfig = allPresets[currentBaseName] || DEFAULT_PRESETS["Default"];
+             allPresets["Custom"] = { ...baseConfig, name: "Custom" };
          }
     }
+    // Potentially update the 'Custom' preset data in real-time or wait for save/regenerate
+    // For now, just switching is enough. Changes are captured on save/copy/regenerate.
 }
 
 // --- Map Generation and Visualization ---
@@ -359,12 +369,41 @@ function initializeEnvironmentMap(config: EriscapeConfig): EnvironmentMap {
             elevation: 0, condition: "dirt", hazardLevel: 0
         }))
     );
+
+    // Define start and end safe zone properties
+    // Calculate the final target radius first
+    const endRadius = Math.max(1, Math.min(width, height) * 0.05); // Example: 5% of smallest dim, min 1
+
+    // Determine the valid area for the center of the final circle
+    // Ensure the circle stays within bounds [0, width] and [0, height]
+    const minX = endRadius;
+    const maxX = width - endRadius;
+    const minY = endRadius;
+    const maxY = height - endRadius;
+
+    let endX: number;
+    let endY: number;
+
+    // Check if the valid area exists (map is large enough for the circle)
+    if (minX < maxX && minY < maxY) {
+        // Pick a random point within the valid bounds
+        endX = minX + Math.random() * (maxX - minX);
+        endY = minY + Math.random() * (maxY - minY);
+    } else {
+        // If the map is too small for the end radius padding, default to center
+        console.warn("[Eriscape] Map too small relative to final safe zone radius. Defaulting end zone to center.");
+        endX = width / 2;
+        endY = height / 2;
+    }
+
+    // Define start and end safe zone properties with RANDOMIZED END POINT
     const safeZone = {
-        start: { x: width / 2, y: height / 2, radius: width * 0.4 },
-        end: { x: width / 2, y: height / 2, radius: 0 },
+        start: { x: width / 2, y: height / 2, radius: Math.max(width, height) / 2 }, // Start still covers map centered
+        end: { x: endX, y: endY, radius: endRadius }, // End point is now randomized
     };
+    
     envMap = { width, height, resolution, biome: "plains", cells, safeZone, events: [] };
-    console.log("Map Initialized");
+    console.log("Map Initialized with Safe Zone:", safeZone);
     console.groupEnd();
     return envMap;
 }
@@ -407,9 +446,15 @@ function assignSurfaceConditions(env: EnvironmentMap, maxElevation: number): voi
      console.groupEnd();
 }
 
-function updateMapTexture(env: EnvironmentMap, safeZoneAtTick: { x: number; y: number; radius: number }): void {
+// *** MODIFIED updateMapTexture ***
+function updateMapTexture(
+    env: EnvironmentMap,
+    safeZoneAtTick: { x: number; y: number; radius: number },
+    t: number, // Current time tick
+    tFinal: number // Total time ticks for the simulation
+): void {
     console.groupCollapsed("[Eriscape] Updating Map Texture");
-    if (!scene || !envMap || !currentActualConfig) { // Added envMap/currentActualConfig check
+    if (!scene || !envMap || !currentActualConfig) {
         console.log("Scene, envMap, or currentActualConfig not ready.");
         console.groupEnd();
         return;
@@ -440,24 +485,87 @@ function updateMapTexture(env: EnvironmentMap, safeZoneAtTick: { x: number; y: n
             if (cell.condition === "rock") { r = Math.floor(r*1.1); g = Math.floor(g*1.1); b = Math.floor(b*1.1); }
             r = Math.min(255, Math.max(0, r)); g = Math.min(255, Math.max(0, g)); b = Math.min(255, Math.max(0, b));
             ctx.fillStyle = `rgb(${r},${g},${b})`;
-            ctx.fillRect(i, neededSize - 1 - j, 1, 1);
+            ctx.fillRect(i, neededSize - 1 - j, 1, 1); // Draw map background
         }
      }
 
+    // --- NEW SAFE ZONE DRAWING LOGIC ---
     ctx.strokeStyle = "red";
     ctx.lineWidth = Math.max(1, Math.floor(neededSize / 150));
-    const normX = safeZoneAtTick.x / env.width;
-    const normY = safeZoneAtTick.y / env.height;
-    const sx = normX * neededSize;
-    const sy = (1 - normY) * neededSize;
-    const sr = (safeZoneAtTick.radius / env.width) * neededSize;
 
-    if (sr > 0 && isFinite(sx) && isFinite(sy)) {
-        ctx.beginPath(); ctx.arc(sx, sy, sr, 0, 2 * Math.PI); ctx.stroke();
+    // Calculate interpolation fraction (0 at start, 1 at end)
+    const fraction = tFinal === 0 ? 0 : Scalar.Clamp(t / tFinal, 0, 1);
+
+    // Target circle properties (center and radius) at the current time t
+    const targetCenterX = safeZoneAtTick.x;
+    const targetCenterY = safeZoneAtTick.y;
+    const targetRadius = safeZoneAtTick.radius; // This is the radius it *would* have if it were a circle at time t
+
+    // Interpolate Dimensions:
+    // Start: Full map width/height. End: Target circle diameter (2 * targetRadius)
+    const currentWidth = Scalar.Lerp(env.width, targetRadius * 2, fraction);
+    const currentHeight = Scalar.Lerp(env.height, targetRadius * 2, fraction);
+
+    // Interpolate Position:
+    // Start: Center of the map. End: Target circle center
+    const startCenterX = env.width / 2;
+    const startCenterY = env.height / 2;
+    const currentCenterX = Scalar.Lerp(startCenterX, targetCenterX, fraction);
+    const currentCenterY = Scalar.Lerp(startCenterY, targetCenterY, fraction);
+
+    // Interpolate Corner Radius:
+    // Start: 0 (sharp corners). End: Target circle radius (making it a circle)
+    // The effective corner radius needs to make the shape circular when width/height match the diameter.
+    const cornerRadius = Scalar.Lerp(0, targetRadius, fraction);
+
+    // --- Convert to Canvas Coordinates ---
+    // Top-left corner coordinates
+    const canvasX = ((currentCenterX - currentWidth / 2) / env.width) * neededSize;
+     // Remember canvas Y is inverted (0 is top)
+    const canvasY = (1 - (currentCenterY + currentHeight / 2) / env.height) * neededSize;
+
+    // Canvas dimensions
+    const canvasW = (currentWidth / env.width) * neededSize;
+    const canvasH = (currentHeight / env.height) * neededSize;
+
+    // Canvas corner radius - scale based on the smaller dimension ratio to avoid excessive stretching
+    // We also need to clamp the corner radius so it's not more than half the width/height.
+    // Use a safe check for division by zero if currentWidth/Height can be zero
+    const scaleRatioW = currentWidth > 0 ? canvasW / currentWidth : 0;
+    const scaleRatioH = currentHeight > 0 ? canvasH / currentHeight : 0;
+    const scaleRatio = Math.min(scaleRatioW, scaleRatioH); // How much map units scale to pixels
+    let canvasCornerRadius = cornerRadius * scaleRatio;
+    // Clamp corner radius to be valid for roundRect
+    canvasCornerRadius = Math.max(0, Math.min(canvasCornerRadius, canvasW / 2, canvasH / 2));
+
+    // Only draw if dimensions are positive and coordinates are finite
+    if (canvasW > 0.1 && canvasH > 0.1 && isFinite(canvasX) && isFinite(canvasY) && isFinite(canvasCornerRadius)) {
+        ctx.beginPath();
+        // Use roundRect if available and radius is positive
+        if (ctx.roundRect && canvasCornerRadius >= 0) {
+             ctx.roundRect(canvasX, canvasY, canvasW, canvasH, canvasCornerRadius);
+        } else {
+            // Fallback to drawing the target *circle* or a simple rectangle if roundRect is not supported or radius is 0
+            console.warn("CanvasRenderingContext2D.roundRect not supported or invalid radius, drawing fallback.");
+            if (fraction < 1) { // Draw a rectangle if not fully shrunk
+                 ctx.rect(canvasX, canvasY, canvasW, canvasH);
+            } else { // Draw the final circle if fully shrunk
+                const fallbackSX = (targetCenterX / env.width) * neededSize;
+                const fallbackSY = (1 - targetCenterY / env.height) * neededSize;
+                const fallbackSR = (targetRadius / env.width) * neededSize; // Simple scaling
+                if (fallbackSR > 0 && isFinite(fallbackSX) && isFinite(fallbackSY)) {
+                    ctx.arc(fallbackSX, fallbackSY, fallbackSR, 0, 2 * Math.PI);
+                }
+            }
+        }
+        ctx.stroke();
     }
+    // --- END OF NEW LOGIC ---
+
     mapTexture.update();
     console.groupEnd();
 }
+
 
 function updateCameraAndPlane(config: EriscapeConfig) {
      console.groupCollapsed("[Eriscape] Updating Camera and Plane");
@@ -475,7 +583,7 @@ function updateCameraAndPlane(config: EriscapeConfig) {
 
          plane = MeshBuilder.CreatePlane("mapPlane", { width: config.width, height: config.height }, scene);
          plane.rotation.x = Math.PI / 2;
-         plane.metadata = { width: config.width, height: config.height };
+         plane.metadata = { width: config.width, height: config.height }; // Store dimensions
 
          if (oldMaterial) { plane.material = oldMaterial; }
          else {
@@ -483,9 +591,15 @@ function updateCameraAndPlane(config: EriscapeConfig) {
              mapMaterial.backFaceCulling = false; mapMaterial.specularColor = new Color3(0.1, 0.1, 0.1); mapMaterial.ambientColor = new Color3(0.8, 0.8, 0.8);
              plane.material = mapMaterial; console.log("Created new material for plane.");
          }
-         if (mapTexture && plane.material instanceof StandardMaterial) { plane.material.diffuseTexture = mapTexture; }
+         // Re-apply texture if it exists
+         if (mapTexture && plane.material instanceof StandardMaterial) {
+              plane.material.diffuseTexture = mapTexture;
+              console.log("Applied existing texture to new plane.");
+         }
 
      } else { console.log("Plane size unchanged."); }
+
+     // Always update position as center might change relative to origin if needed later
      plane.position.set(config.width / 2, 0, config.height / 2);
      console.log("Plane Position:", plane.position);
 
@@ -493,6 +607,7 @@ function updateCameraAndPlane(config: EriscapeConfig) {
     if (!camera.target.equalsWithEpsilon(center, 0.1)) {
          console.log("Updating Camera Target:", center); camera.setTarget(center);
     }
+    // Adjust camera distance based on map size
     const targetRadius = Math.max(config.width, config.height) * 1.2;
      if (Math.abs(camera.radius - targetRadius) > 0.1) {
          console.log("Updating Camera Radius:", targetRadius); camera.radius = targetRadius;
@@ -527,41 +642,59 @@ function initializeApp() {
          !inputNoiseScaleMin || !inputNoiseScaleMax || !inputMaxElevationMin || !inputMaxElevationMax ||
          !btnRegenerate || !btnSavePreset || !btnCopyJson || !btnRandomSeed || !statusMessage || !timeSlider || !timeLabel) {
         alert("Initialization Error: Could not find all required UI elements. Check HTML IDs.");
+        console.error("Missing UI elements", {
+            canvas, presetSelect, inputSeed, inputWidth, inputHeight, inputResolution,
+            inputNoiseScaleMin, inputNoiseScaleMax, inputMaxElevationMin, inputMaxElevationMax,
+            btnRegenerate, btnSavePreset, btnCopyJson, btnRandomSeed, statusMessage, timeSlider, timeLabel
+        });
         return;
     }
 
-    loadPresets();
+    loadPresets(); // Loads presets and populates UI
 
     engine = new Engine(canvas, true);
     scene = new Scene(engine);
     scene.clearColor = new Color3(0.1, 0.1, 0.2).toColor4();
 
-    camera = new ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 4, 150, Vector3.Zero(), scene);
+    // Initialize camera position based on default preset initially
+    const initialConfig = allPresets[currentPresetName] || DEFAULT_PRESETS["Default"];
+    const initialCenter = new Vector3(initialConfig.width / 2, 0, initialConfig.height / 2);
+    const initialRadius = Math.max(initialConfig.width, initialConfig.height) * 1.2;
+    camera = new ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 4, initialRadius, initialCenter, scene);
     camera.attachControl(canvas, true);
-    camera.minZ = 0.1; camera.wheelPrecision = 20; camera.lowerRadiusLimit = 10; camera.upperRadiusLimit = 1000;
+    camera.minZ = 0.1; camera.wheelPrecision = 20; camera.lowerRadiusLimit = 10; camera.upperRadiusLimit = 2000; // Increased upper limit
 
     const light = new HemisphericLight("light", new Vector3(0.1, 1, 0.2), scene); light.intensity = 0.9;
 
-    // Initial generation will create the plane and material
-    regenerateMap(); // This will now use the loaded preset config
+    // Initial generation uses the loaded preset config
+    regenerateMap();
 
     // Add Event Listeners
     presetSelect.addEventListener("change", handlePresetChange);
     btnRegenerate.addEventListener("click", regenerateMap);
     btnSavePreset.addEventListener("click", () => {
-        if (updatePresetFromUI(currentPresetName)) { saveAllPresets(); }
+        if (currentPresetName === "Custom" || window.confirm(`This will overwrite the '${currentPresetName}' preset with current UI values. Continue?`)) {
+            if (updatePresetFromUI(currentPresetName)) {
+                 saveAllPresets();
+                 populatePresetDropdown(); // Refresh dropdown in case name was changed implicitly
+            }
+        }
     });
     btnCopyJson.addEventListener("click", handleCopyJson);
     btnRandomSeed.addEventListener("click", handleRandomizeSeed);
+
+    // *** MODIFIED Time Slider Listener ***
     timeSlider.addEventListener("input", () => {
         if (!envMap || !currentActualConfig) return;
         const tick = Number(timeSlider.value);
-        timeLabel.textContent = `Time: ${tick} / ${currentActualConfig.tFinal}`;
-        // *** CORRECTED FUNCTION CALL in Listener ***
-        const currentSafeZone = computeSafeZoneAtTime(envMap, tick, currentActualConfig.tFinal);
-        updateMapTexture(envMap, currentSafeZone);
+        const tFinal = currentActualConfig.tFinal; // Get tFinal from the config used for generation
+        timeLabel.textContent = `Time: ${tick} / ${tFinal}`;
+        const currentSafeZone = computeSafeZoneAtTime(envMap, tick, tFinal);
+        // Pass current time (tick) and total time (tFinal)
+        updateMapTexture(envMap, currentSafeZone, tick, tFinal);
     });
 
+    // Mark preset as 'Custom' on any input change
     [inputSeed, inputWidth, inputHeight, inputResolution, inputNoiseScaleMin, inputNoiseScaleMax, inputMaxElevationMin, inputMaxElevationMax].forEach(input => {
         input.addEventListener('input', handleInputChange);
     });
@@ -569,7 +702,8 @@ function initializeApp() {
     engine.runRenderLoop(() => { scene.render(); });
     window.addEventListener("resize", () => { engine.resize(); });
     window.addEventListener("keydown", (ev) => {
-        if (ev.shiftKey && ev.ctrlKey && ev.altKey && ev.key === 'I') {
+        // Toggle Inspector
+        if (ev.shiftKey && ev.ctrlKey && ev.altKey && ev.key === 'I') { // Shift+Ctrl+Alt+I
             if (scene.debugLayer.isVisible()) { scene.debugLayer.hide(); }
             else { scene.debugLayer.show({ embedMode: true }); }
         }
@@ -583,57 +717,100 @@ function initializeApp() {
 function regenerateMap() {
     console.group("[Eriscape] ==== Regenerating Map ====");
     showStatus("Generating...");
-    btnRegenerate.disabled = true;
+    btnRegenerate.disabled = true; // Disable button during generation
+
+    // Ensure the 'Custom' preset reflects UI changes before regenerating
+    if (currentPresetName === "Custom") {
+        if (!updatePresetFromUI("Custom")) {
+            showStatus("Cannot regenerate with invalid Custom settings.", true);
+            btnRegenerate.disabled = false;
+            console.groupEnd();
+            return; // Stop regeneration if custom settings are invalid
+        }
+    }
 
     const baseConfig = allPresets[currentPresetName];
     if (!baseConfig) {
-        showStatus(`Error: Preset "${currentPresetName}" not found!`, true);
-        btnRegenerate.disabled = false; console.groupEnd(); return;
+        showStatus(`Error: Preset "${currentPresetName}" not found! Using Default.`, true);
+        currentPresetName = "Default";
+        presetSelect.value = "Default";
+        // Retry getting the config after resetting to Default
+        const defaultConfig = allPresets["Default"];
+        if (!defaultConfig) {
+             showStatus(`FATAL: Default preset missing! Cannot regenerate.`, true);
+             btnRegenerate.disabled = false; console.groupEnd(); return;
+        }
+         // It's safer to directly use defaultConfig here if baseConfig lookup failed initially
+         loadPresetIntoUI("Default"); // Load default values into UI as well
+         return regenerateMap(); // Re-call regenerate with the default preset loaded
     }
 
-    // *** Ensure timeSlider exists before accessing its value ***
+    // Use current slider value if available, otherwise default to 0
     const currentTickValue = timeSlider ? Number(timeSlider.value) : 0;
 
-    // 1. Determine Actual Parameters
-    const actualSeed = baseConfig.seed; // Use the explicit seed from the preset/UI
+    // 1. Determine Actual Parameters for this generation run
+    const actualSeed = baseConfig.seed; // Use the explicit seed
     const actualWidth = baseConfig.width;
     const actualHeight = baseConfig.height;
     const actualResolution = baseConfig.resolution;
+    // Randomize values within ranges for this specific generation
     const actualNoiseScale = getRandomInRange(baseConfig.noiseScale);
     const actualMaxElevation = getRandomInRange(baseConfig.maxElevation);
     const actualTFinal = baseConfig.tFinal;
 
+    // Store the exact parameters used for this generation
     currentActualConfig = {
         name: `${baseConfig.name} (Generated)`, seed: actualSeed, width: actualWidth, height: actualHeight, resolution: actualResolution,
-        noiseScale: {min: actualNoiseScale, max: actualNoiseScale },
-        maxElevation: {min: actualMaxElevation, max: actualMaxElevation },
+        noiseScale: {min: actualNoiseScale, max: actualNoiseScale }, // Store the actual single value used
+        maxElevation: {min: actualMaxElevation, max: actualMaxElevation }, // Store the actual single value used
         tFinal: actualTFinal
     };
      console.log("Using actual parameters:", currentActualConfig);
 
-    // 2. Create Noise Generator
-    const noiseGenerator = createNoise2D(mulberry32(actualSeed)); // Use the actual seed
+    // 2. Create Noise Generator using the actual seed
+    const noiseGenerator = createNoise2D(mulberry32(actualSeed));
 
-    // 3. Initialize Map Data Structure
+    // 3. Initialize Map Data Structure (includes setting up safeZone based on new dimensions)
     const newEnvMap = initializeEnvironmentMap(currentActualConfig);
 
-    // 4. Generate Heightmap & Conditions
+    // 4. Generate Heightmap & Assign Conditions
     generateHeightMap(newEnvMap, actualNoiseScale, actualMaxElevation, noiseGenerator);
     assignSurfaceConditions(newEnvMap, actualMaxElevation);
-    envMap = newEnvMap; // Update the global envMap
+    envMap = newEnvMap; // Update the global envMap reference
 
-    // 5. Update Camera & Plane
+    // 5. Update Camera & Plane (adjusts to new dimensions)
     updateCameraAndPlane(currentActualConfig);
 
-    // 6. Update Texture
-    if (timeSlider) timeSlider.max = actualTFinal.toString(); // Check if slider exists
-    if (timeLabel) timeLabel.textContent = `Time: ${currentTickValue} / ${actualTFinal}`; // Check if label exists
-    // *** CORRECTED FUNCTION CALL ***
-    const currentSafeZone = computeSafeZoneAtTime(envMap, currentTickValue, actualTFinal);
-    updateMapTexture(envMap, currentSafeZone);
+    // 6. Update Texture and Safe Zone Visualization
+    if (timeSlider) {
+        timeSlider.max = actualTFinal.toString();
+        // Clamp current slider value if it exceeds the new maximum time
+        const clampedTickValue = Math.min(currentTickValue, actualTFinal);
+        if (clampedTickValue !== currentTickValue) {
+            timeSlider.value = clampedTickValue.toString();
+            console.log(`Clamped time slider value from ${currentTickValue} to ${clampedTickValue}`);
+        }
+        const finalTickValue = Number(timeSlider.value); // Read the potentially clamped value
+
+        if (timeLabel) {
+            timeLabel.textContent = `Time: ${finalTickValue} / ${actualTFinal}`;
+        }
+
+        // Calculate safe zone state for the (potentially clamped) current time
+        const currentSafeZone = computeSafeZoneAtTime(envMap, finalTickValue, actualTFinal);
+        // *** MODIFIED CALL: Pass finalTickValue and actualTFinal ***
+        updateMapTexture(envMap, currentSafeZone, finalTickValue, actualTFinal);
+
+    } else {
+        // Fallback if slider doesn't exist (e.g., initial load before slider is fully ready)
+        const currentSafeZone = computeSafeZoneAtTime(envMap, 0, actualTFinal);
+        updateMapTexture(envMap, currentSafeZone, 0, actualTFinal);
+        if(timeLabel) timeLabel.textContent = `Time: 0 / ${actualTFinal}`;
+    }
+
 
     showStatus("Map regenerated successfully.");
-    btnRegenerate.disabled = false;
+    btnRegenerate.disabled = false; // Re-enable button
     console.groupEnd();
 }
 
